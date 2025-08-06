@@ -55,7 +55,12 @@ class Settings {
 				$this->save_settings( $post_data );
 			}
 		);
-		$this->add_settings_tabs();
+		add_action(
+			'init',
+			function () {
+				$this->add_settings_tabs();
+			}
+		);
 
 		add_filter(
 			'gu_add_admin_page',
@@ -86,15 +91,14 @@ class Settings {
 			'git_updater_additions' === $post_data['option_page']
 		) {
 			$new_options = $post_data['git_updater_additions'] ?? [];
-
 			$new_options = $this->sanitize( $new_options );
+			$bad_input   = empty( $new_options[0]['slug'] ) || empty( $new_options[0]['uri'] );
 
 			foreach ( $options as $option ) {
 				$is_plugin_slug = preg_match( '@/@', $new_options[0]['slug'] );
-				$type_plugin    = \preg_match( '/plugin/', $new_options[0]['type'] );
+				$type_plugin    = preg_match( '/plugin/', $new_options[0]['type'] );
 				$bad_input      = $type_plugin && ! $is_plugin_slug;
 				$bad_input      = ! $bad_input ? ! $type_plugin && $is_plugin_slug : $bad_input;
-				$bad_input      = $bad_input || empty( $new_options[0]['slug'] ) || empty( $new_options[0]['uri'] );
 				$duplicate      = in_array( $new_options[0]['ID'], $option, true );
 				if ( $duplicate || $bad_input ) {
 					$_POST['action'] = false;
@@ -121,7 +125,7 @@ class Settings {
 	 * Adds Additions tab to Settings page.
 	 */
 	public function add_settings_tabs() {
-		$install_tabs = [ 'git_updater_additions' => esc_html__( 'Additions', 'git-updater-additions' ) ];
+		$install_tabs = [ 'git_updater_additions' => esc_html__( 'Additions', 'git-updater' ) ];
 		add_filter(
 			'gu_add_settings_tabs',
 			function ( $tabs ) use ( $install_tabs ) {
@@ -144,14 +148,15 @@ class Settings {
 		$this->additions_page_init();
 
 		if ( 'git_updater_additions' === $tab ) {
-			$action = add_query_arg(
+			$action  = add_query_arg(
 				[
 					'page' => 'git-updater',
 					'tab'  => $tab,
 				],
 				$action
 			);
-			( new Repo_List_Table( self::$options_additions ) )->render_list_table();
+			$options = ( new Additions() )->deduplicate( self::$options_additions );
+			( new Repo_List_Table( $options ) )->render_list_table();
 			?>
 			<form class="settings" method="post" action="<?php echo esc_attr( $action ); ?>">
 				<?php
@@ -176,14 +181,14 @@ class Settings {
 
 		add_settings_section(
 			'git_updater_additions',
-			esc_html__( 'Additions', 'github-updater' ),
+			esc_html__( 'Addition Packages', 'git-updater' ),
 			[ $this, 'print_section_additions' ],
 			'git_updater_additions'
 		);
 
 		add_settings_field(
 			'type',
-			esc_html__( 'Repository Type', 'git-updater-additions' ),
+			esc_html__( 'Repository Type', 'git-updater' ),
 			[ $this, 'callback_dropdown' ],
 			'git_updater_additions',
 			'git_updater_additions',
@@ -195,55 +200,68 @@ class Settings {
 
 		add_settings_field(
 			'slug',
-			esc_html__( 'Repository Slug', 'git-updater-additions' ),
+			esc_html__( 'Repository Slug', 'git-updater' ),
 			[ $this, 'callback_field' ],
 			'git_updater_additions',
 			'git_updater_additions',
 			[
 				'id'          => 'git_updater_additions_slug',
 				'setting'     => 'slug',
-				'title'       => __( 'Ensure proper slug for plugin or theme.', 'git-updater-addtions' ),
+				'title'       => __( 'Ensure proper slug for plugin or theme.', 'git-updater' ),
 				'placeholder' => 'plugin-slug/plugin-slug.php',
 			]
 		);
 
 		add_settings_field(
 			'uri',
-			esc_html__( 'Repository URI', 'git-updater-additions' ),
+			esc_html__( 'Repository URI', 'git-updater' ),
 			[ $this, 'callback_field' ],
 			'git_updater_additions',
 			'git_updater_additions',
 			[
 				'id'      => 'git_updater_additions_uri',
 				'setting' => 'uri',
-				'title'   => __( 'Ensure proper URI for plugin or theme.', 'git-updater-addtions' ),
+				'title'   => __( 'Ensure proper URI for plugin or theme.', 'git-updater' ),
 			]
 		);
 
 		add_settings_field(
 			'primary_branch',
-			esc_html__( 'Primary Branch', 'git-updater-additions' ),
+			esc_html__( 'Primary Branch', 'git-updater' ),
 			[ $this, 'callback_field' ],
 			'git_updater_additions',
 			'git_updater_additions',
 			[
 				'id'          => 'git_updater_additions_primary_branch',
 				'setting'     => 'primary_branch',
-				'title'       => __( 'Ensure proper primary branch, default is `master`', 'git-updater-additions' ),
+				'title'       => __( 'Ensure proper primary branch, default is `master`', 'git-updater' ),
 				'placeholder' => 'master',
 			]
 		);
 
 		add_settings_field(
 			'release_asset',
-			esc_html__( 'Release Asset', 'git-updater-additions' ),
+			esc_html__( 'Release Asset', 'git-updater' ),
 			[ $this, 'callback_checkbox' ],
 			'git_updater_additions',
 			'git_updater_additions',
 			[
 				'id'      => 'git_updater_additions_release_asset',
 				'setting' => 'release_asset',
-				'title'   => __( 'Check if a release asset is required.', 'git-updater-additions' ),
+				'title'   => __( 'Check if a release asset is required.', 'git-updater' ),
+			]
+		);
+
+		add_settings_field(
+			'private_package',
+			esc_html__( 'Private Package', 'git-updater' ),
+			[ $this, 'callback_checkbox' ],
+			'git_updater_additions',
+			'git_updater_additions',
+			[
+				'id'      => 'git_updater_additions_private_package',
+				'setting' => 'private_package',
+				'title'   => __( 'Check if this package is not to be shared with aggregators.', 'git-updater' ),
 			]
 		);
 	}
@@ -261,7 +279,10 @@ class Settings {
 		foreach ( (array) $input as $key => $value ) {
 			$new_input[0][ $key ] = 'uri' === $key ? untrailingslashit( esc_url_raw( trim( $value ) ) ) : sanitize_text_field( $value );
 		}
-		$new_input[0]['ID'] = md5( $new_input[0]['slug'] );
+		$new_input[0]['primary_branch']  = ! empty( $new_input[0]['primary_branch'] ) ? $new_input[0]['primary_branch'] : 'master';
+		$new_input[0]['ID']              = md5( $new_input[0]['slug'] );
+		$new_input[0]['source']          = md5( home_url() );
+		$new_input[0]['private_package'] = ! empty( $new_input[0]['private_package'] ) ? true : false;
 
 		return $new_input;
 	}
@@ -271,7 +292,7 @@ class Settings {
 	 */
 	public function print_section_additions() {
 		echo '<p>';
-		esc_html_e( 'If there are git repositories that do not natively support Git Updater you can add them here.', 'git-updater-additions' );
+		esc_html_e( 'If there are git repositories that do not natively support Git Updater you can add them here.', 'git-updater' );
 		echo '</p>';
 	}
 

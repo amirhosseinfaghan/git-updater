@@ -12,6 +12,7 @@ namespace Fragen\Git_Updater;
 
 use Fragen\Singleton;
 use Fragen\Git_Updater\Traits\GU_Trait;
+use stdClass;
 
 /*
  * Exit if called directly.
@@ -82,7 +83,6 @@ class Settings {
 		if ( isset( $_POST['gu_refresh_cache'] ) && ! ( $this instanceof Messages ) ) {
 			$this->delete_all_cached_data();
 			set_site_transient( 'gu_refresh_cache', true, 90 );
-			wp_cache_flush();
 		}
 	}
 
@@ -134,7 +134,7 @@ class Settings {
 		 * @since 10.0.0
 		 * @param array static::$auth_required Array of authentication requirements.
 		 */
-		static::$auth_required = \apply_filters( 'gu_settings_auth_required', static::$auth_required );
+		static::$auth_required = apply_filters( 'gu_settings_auth_required', static::$auth_required );
 	}
 
 	/**
@@ -146,14 +146,6 @@ class Settings {
 	 */
 	private function settings_tabs() {
 		$tabs = [ 'git_updater_settings' => esc_html__( 'Settings', 'git-updater' ) ];
-
-		/**
-		 * Filter settings tabs.
-		 *
-		 * @since 8.0.0
-		 * @param array $tabs Array of default tabs.
-		 */
-		$settings_tabs = apply_filters_deprecated( 'github_updater_add_settings_tabs', [ $tabs ], '10.0.0', '' );
 
 		/**
 		 * Filter settings tabs.
@@ -177,17 +169,6 @@ class Settings {
 		$gits       = $this->get_running_git_servers();
 		$git_subtab = [];
 		$gu_subtabs = [];
-
-		/**
-		 * Filter subtabs to be able to add subtab from git API class.
-		 *
-		 * @since 8.0.0
-		 *
-		 * @param array $gu_subtabs Array of added subtabs.
-		 *
-		 * @return array $subtabs Array of subtabs.
-		 */
-		$gu_subtabs = apply_filters_deprecated( 'github_updater_add_settings_subtabs', [ $gu_subtabs ], '10.0.0', 'gu_add_settings_subtabs' );
 
 		/**
 		 * Filter subtabs to be able to add subtab from git API class.
@@ -306,8 +287,8 @@ class Settings {
 		<div class="wrap git-updater-settings">
 			<h1>
 				<a href="https://github.com/afragen/git-updater" target="_blank"><img src="<?php echo esc_attr( $logo ); ?>" alt="Git Updater logo" /></a><br>
-				<?php esc_html_e( __( 'Git Updater', 'git-updater' ) ); ?>
-				<span class="description"><?php esc_html_e( ' v' . $this->get_plugin_version() ); ?></span>
+				<?php esc_html_e( 'Git Updater', 'git-updater' ); ?>
+				<span class="description"><?php echo esc_html( ' v' . $this->get_plugin_version() ); ?></span>
 			</h1>
 			<?php $this->options_tabs(); ?>
 			<?php $this->admin_page_notices(); ?>
@@ -335,17 +316,6 @@ class Settings {
 			<?php endif; ?>
 
 			<?php
-			/**
-			 * Action hook to add admin page data to appropriate $tab.
-			 *
-			 * @since 8.0.0
-			 *
-			 * @param string $tab    Name of tab.
-			 * @param string $action Save action for appropriate WordPress installation.
-			 *                       Single site or Multisite.
-			 */
-			do_action_deprecated( 'github_updater_add_admin_page', [ $tab, $action ], 'gu_add_admin_page' );
-
 			/**
 			 * Action hook to add admin page data to appropriate $tab.
 			 *
@@ -396,7 +366,7 @@ class Settings {
 		register_setting(
 			'git_updater',
 			'git_updater',
-			[ $this, 'sanitize' ]
+			[ 'sanitize_callback' => [ $this, 'sanitize' ] ]
 		);
 
 		Singleton::get_instance( 'Install', $this )->run();
@@ -437,28 +407,6 @@ class Settings {
 			]
 		);
 
-		add_settings_field(
-			'deprecated_error_logging',
-			null,
-			[ $this, 'token_callback_checkbox' ],
-			'git_updater_install_settings',
-			'git_updater_settings',
-			[
-				'id'    => 'deprecated_error_logging',
-				'title' => esc_html__( 'Display `deprecated hook` messaging in debug.log', 'git-updater' ),
-				'class' => defined( 'WP_DEBUG' ) && WP_DEBUG ? '' : 'hidden',
-			]
-		);
-
-		/**
-		 * Hook to add Git API settings.
-		 *
-		 * @since 8.0.0
-		 *
-		 * @param array $auth_required Array containing authorization needs of git APIs.
-		 */
-		do_action_deprecated( 'github_updater_add_settings', [ static::$auth_required ], '10.0.0', 'gu_add_settings' );
-
 		/**
 		 * Hook to add Git API settings.
 		 *
@@ -495,7 +443,7 @@ class Settings {
 			}
 
 			$setting_field['id']    = $token->slug;
-			$setting_field['title'] = $type . esc_html( $token->name );
+			$setting_field['title'] = isset( $token->name ) ? $type . esc_html( $token->name ) : $type . esc_html__( 'Name not available', 'git-updater' );
 
 			/**
 			 * Filter repo settings fields.
@@ -503,19 +451,10 @@ class Settings {
 			 * @since 10.0.0
 			 *
 			 * @param array
-			 * @param \stdClass $token Repository object.
+			 * @param stdClass $token Repository object.
 			 * @param string $token->git Name of git host, eg. GitHub.
 			 */
 			$repo_setting_field = apply_filters( 'gu_add_repo_setting_field', [], $token, $token->git );
-
-			/**
-			 * Filter repo settings fields.
-			 *
-			 * @param array
-			 * @param \stdClass $token Repository object.
-			 * @param string $token->git Name of git host, eg. GitHub.
-			 */
-			$repo_setting_field = empty( $repo_setting_field ) ? apply_filters_deprecated( 'github_updater_add_repo_setting_field', [ [], $token, $token->git ], '10.0.0', 'gu_add_repo_setting_field' ) : $repo_setting_field;
 
 			if ( empty( $repo_setting_field ) ) {
 				continue;
@@ -525,6 +464,7 @@ class Settings {
 			$setting_field['callback'] = $token->slug;
 
 			$title = 'token_callback_checkbox' !== $setting_field['callback_method'][1] ? $setting_field['title'] : null;
+
 			add_settings_field(
 				$setting_field['id'],
 				$title,
@@ -562,7 +502,6 @@ class Settings {
 			'db_version',
 			'branch_switch',
 			'bypass_background_processing',
-			'deprecated_error_logging',
 		];
 
 		foreach ( $running_servers as $server ) {
@@ -631,32 +570,24 @@ class Settings {
 		 */
 		$overrides = apply_filters( 'gu_override_dot_org', [] );
 
-		/**
-		 * Filter to return array of overrides to dot org.
-		 *
-		 * @since 8.5.0
-		 * @return array
-		 */
-		$overrides = empty( $overrides ) ? apply_filters_deprecated( 'github_updater_override_dot_org', [ [] ], '10.0.0', 'gu_override_dot_org' ) : $overrides;
-
 		// Show plugins/themes skipped using Skip Updates plugin.
 		$skip_updates = get_site_option( 'skip_updates', [] );
 		foreach ( $skip_updates as $skip_update ) {
 			$overrides[] = $skip_update['slug'];
 		}
-		$overrides = \array_unique( $overrides );
+		$overrides = array_unique( $overrides );
 
 		if ( ! empty( $overrides ) ) {
 			echo '<h4>' . esc_html__( 'Overridden Plugins and Themes', 'git-updater' ) . '</h4>';
 			echo '<p>' . esc_html__( 'The following plugins or themes might exist on wp.org, but any updates will be downloaded from their respective git repositories.', 'git-updater' ) . '</p>';
 
 			foreach ( $plugins as $plugin ) {
-				if ( in_array( $plugin->file, $overrides, true ) ) {
+				if ( in_array( $plugin->file, $overrides, true ) && isset( $plugin->name ) ) {
 					echo '<p>' . wp_kses_post( $dashicon_plugin . $plugin->name ) . '</p>';
 				}
 			}
 			foreach ( $themes as $theme ) {
-				if ( in_array( $theme->slug, $overrides, true ) ) {
+				if ( in_array( $theme->slug, $overrides, true ) && isset( $theme->name ) ) {
 					echo '<p>' . wp_kses_post( $dashicon_theme . $theme->name ) . '</p>';
 				}
 			}
@@ -715,13 +646,6 @@ class Settings {
 		/**
 		 * Save $options in add-on classes.
 		 *
-		 * @since 8.0.0
-		 */
-		do_action_deprecated( 'github_updater_update_settings', [ $_POST ], '10.0.0', 'gu_update_settings' );
-
-		/**
-		 * Save $options in add-on classes.
-		 *
 		 * @since 10.0.0
 		 */
 		do_action( 'gu_update_settings', $_POST );
@@ -761,17 +685,8 @@ class Settings {
 	protected function redirect_on_save() {
 		$update             = false;
 		$refresh_transients = $this->refresh_transients();
-		$install_api_plugin = Singleton::get_instance( 'Add_Ons', $this )->install_api_plugin();
 		$reset_api_key      = false;
 		$reset_api_key      = Singleton::get_instance( 'Fragen\Git_Updater\Remote_Management', $this )->reset_api_key();
-
-		/**
-		 * Filter to add to $option_page array.
-		 *
-		 * @since 8.0.0
-		 * @return array
-		 */
-		$option_page = apply_filters_deprecated( 'github_updater_save_redirect', [ [ 'git_updater' ] ], '10.0.0', 'gu_save_redirect' );
 
 		/**
 		 * Filter to add to $option_page array.
@@ -779,7 +694,7 @@ class Settings {
 		 * @since 10.0.0
 		 * @return array
 		 */
-		$option_page = 1 === count( $option_page ) ? apply_filters( 'gu_save_redirect', [ 'git_updater' ] ) : $option_page;
+		$option_page = apply_filters( 'gu_save_redirect', [ 'git_updater' ] );
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing
 		$is_option_page = isset( $_POST['option_page'] ) && in_array( $_POST['option_page'], $option_page, true );
@@ -790,7 +705,7 @@ class Settings {
 
 		$redirect_url = is_multisite() ? network_admin_url( 'settings.php' ) : admin_url( 'options-general.php' );
 
-		if ( $is_option_page || $refresh_transients || $reset_api_key || $install_api_plugin ) {
+		if ( $is_option_page || $refresh_transients || $reset_api_key ) {
 			// phpcs:ignore WordPress.Security.NonceVerification.Missing
 			$query = isset( $_POST['_wp_http_referer'] ) ? parse_url( html_entity_decode( esc_url_raw( wp_unslash( $_POST['_wp_http_referer'] ) ) ), PHP_URL_QUERY ) : '';
 			parse_str( (string) $query, $arr );
@@ -805,7 +720,6 @@ class Settings {
 					'refresh_transients' => $refresh_transients,
 					'reset'              => $reset_api_key,
 					'updated'            => $update,
-					'install_api_plugin' => $install_api_plugin,
 				],
 				$redirect_url
 			);
@@ -912,7 +826,7 @@ class Settings {
 					'slug'    => $e->slug,
 					'file'    => $e->file ?? $e->slug,
 					'branch'  => $e->branch,
-					'name'    => $e->name,
+					'name'    => $e->name ?? esc_attr__( 'Name not available', 'git-updater' ),
 					'private' => $e->is_private ?? false,
 					'broken'  => ! isset( $e->remote_version ) || '0.0.0' === $e->remote_version,
 					'dot_org' => $e->dot_org ?? false,

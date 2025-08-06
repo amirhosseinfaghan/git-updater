@@ -13,6 +13,7 @@ namespace Fragen\Git_Updater;
 use Fragen\Singleton;
 use Fragen\Git_Updater\Traits\GU_Trait;
 use Fragen\Git_Updater\Branch;
+use stdClass;
 
 /*
  * Exit if called directly.
@@ -133,9 +134,7 @@ class Plugin {
 		);
 
 		$additions = apply_filters( 'gu_additions', null, $plugins, 'plugin' );
-		$additions = null === $additions ? apply_filters_deprecated( 'github_updater_additions', [ null, $plugins, 'plugin' ], '10.0.0', 'gu_additions' ) : $additions;
-
-		$plugins = array_merge( $plugins, (array) $additions );
+		$plugins   = array_merge( $plugins, (array) $additions );
 		ksort( $plugins );
 
 		foreach ( (array) $plugins as $slug => $plugin ) {
@@ -151,10 +150,9 @@ class Plugin {
 			);
 
 			$key = array_pop( $key );
-			if ( null === $key || ! \array_key_exists( $key, $all_headers ) ) {
+			if ( null === $key || ! array_key_exists( $key, $all_headers ) ) {
 				continue;
 			}
-			$repo_uri = $plugin[ $key ];
 
 			$header_parts = explode( ' ', self::$extra_headers[ $key ] );
 			$repo_parts   = $this->get_repo_parts( $header_parts[0], 'plugin' );
@@ -174,76 +172,42 @@ class Plugin {
 			}
 			$branch = self::$options[ $current_branch ] ?? $header['primary_branch'];
 
-			$git_plugin['type']                    = 'plugin';
-			$git_plugin['git']                     = $repo_parts['git_server'];
-			$git_plugin['uri']                     = "{$header['base_uri']}/{$header['owner_repo']}";
-			$git_plugin['enterprise']              = $header['enterprise_uri'];
-			$git_plugin['enterprise_api']          = $header['enterprise_api'];
-			$git_plugin['owner']                   = $header['owner'];
-			$git_plugin['slug']                    = $header['repo'];
-			$git_plugin['branch']                  = $branch;
-			$git_plugin['primary_branch']          = $header['primary_branch'];
-			$git_plugin['file']                    = $slug;
-			$git_plugin['local_path']              = trailingslashit( dirname( $paths[ $slug ] ) );
-			$git_plugin['author']                  = $plugin['Author'];
-			$git_plugin['name']                    = $plugin['Name'];
-			$git_plugin['homepage']                = $plugin['PluginURI'];
-			$git_plugin['local_version']           = strtolower( $plugin['Version'] );
-			$git_plugin['sections']['description'] = $plugin['Description'];
-			$git_plugin['languages']               = $header['languages'];
-			$git_plugin['ci_job']                  = $header['ci_job'];
-			$git_plugin['release_asset']           = $header['release_asset'];
-			$git_plugin['broken']                  = ( empty( $header['owner'] ) || empty( $header['repo'] ) );
+			$git_plugin['type']           = 'plugin';
+			$git_plugin['git']            = $repo_parts['git_server'];
+			$git_plugin['did']            = $header['did'];
+			$git_plugin['uri']            = "{$header['base_uri']}/{$header['owner_repo']}";
+			$git_plugin['enterprise']     = $header['enterprise_uri'];
+			$git_plugin['enterprise_api'] = $header['enterprise_api'];
+			$git_plugin['owner']          = $header['owner'];
+			$git_plugin['slug']           = $header['repo'];
+			$git_plugin['slug_did']       = $git_plugin['did'] ? $git_plugin['slug'] . '-' . $this->get_did_hash( $git_plugin['did'] ) : null;
+			$git_plugin['file']           = $slug;
+			$git_plugin['branch']         = $branch;
+			$git_plugin['primary_branch'] = $header['primary_branch'];
+			$git_plugin['ci_job']         = $header['ci_job'];
+			$git_plugin['release_asset']  = $header['release_asset'];
+			$git_plugin['languages']      = $header['languages'];
+			$git_plugin['sections']       = [];
 
-			$content_dir_regex = '/\/' . basename( WP_CONTENT_DIR ) . '.*/';
-			preg_match( $content_dir_regex, $git_plugin['local_path'], $matches );
+			if ( isset( $plugin['Name'] ) ) {
+				$git_plugin['local_path']              = trailingslashit( dirname( $paths[ $slug ] ) );
+				$git_plugin['local_version']           = strtolower( $plugin['Version'] );
+				$git_plugin['author']                  = $plugin['Author'];
+				$git_plugin['author_uri']              = $plugin['AuthorURI'];
+				$git_plugin['name']                    = $plugin['Name'];
+				$git_plugin['homepage']                = $plugin['PluginURI'];
+				$git_plugin['sections']['description'] = $plugin['Description'];
+				$git_plugin['license']                 = $plugin['License'];
+				$git_plugin['update_uri']              = $plugin['UpdateURI'];
+				$git_plugin['security']                = $plugin['Security'];
+			}
 
-			/**
-			 * Filter to specify a unique assets directory.
-			 *
-			 * This will not work for hidden directories, ie `.wordpress-org`
-			 * as they are not reachable from the browser.
-			 *
-			 * @since 10.7.1
-			 * @param string
-			 */
-			$assets_dir            = apply_filters( 'gu_plugin_assets_dir', 'assets/', $slug );
-			$assets_dir            = trailingslashit( $assets_dir );
-			$banner_sizes          = [
-				'low_png'      => 'banner-772x250.png',
-				'low_jpg'      => 'banner-772x250.jpg',
-				'low_png_rtl'  => 'banner-772x250-rtl.png',
-				'low_jpg_rtl'  => 'banner-772x250-rtl.jpg',
-				'high_png'     => 'banner-1544x500.png',
-				'high_jpg'     => 'banner-1544x500.jpg',
-				'high_png_rtl' => 'banner-1544x500-rtl.png',
-				'high_jpg_rtl' => 'banner-1544x500-rtl.jpg',
-			];
-			$git_plugin['icons']   = [];
-			$git_plugin['banners'] = [];
-			$icons                 = [
-				'svg'    => 'icon.svg',
-				'1x_png' => 'icon-128x128.png',
-				'1x_jpg' => 'icon-128x128.jpg',
-				'2x_png' => 'icon-256x256.png',
-				'2x_jpg' => 'icon-256x256.jpg',
-			];
-			foreach ( $banner_sizes as $key => $size ) {
-				if ( \file_exists( $git_plugin['local_path'] . $assets_dir . $size ) ) {
-					$key                           = preg_replace( '/_png|_jpg|_rtl/', '', $key );
-					$git_plugin['banners'][ $key ] = \home_url() . $matches[0] . $assets_dir . $size;
-				}
-			}
-			foreach ( $icons as $key => $filename ) {
-				if ( \file_exists( $git_plugin['local_path'] . $assets_dir . $filename ) ) {
-					$key                         = preg_replace( '/_png|_jpg/', '', $key );
-					$git_plugin['icons'][ $key ] = \home_url() . $matches[0] . $assets_dir . $filename;
-				}
-			}
+			$git_plugin['broken']           = ( empty( $header['owner'] ) || empty( $header['repo'] ) );
 			$git_plugin['icons']['default'] = "https://s.w.org/plugins/geopattern-icon/{$git_plugin['slug']}.svg";
+			$git_plugin['banners']          = [];
 
 			// Fix branch for .git VCS.
-			if ( \file_exists( $git_plugin['local_path'] . '.git/HEAD' ) ) {
+			if ( isset( $git_plugin['local_path'] ) && file_exists( $git_plugin['local_path'] . '.git/HEAD' ) ) {
 				$git_branch           = implode( '/', array_slice( explode( '/', file_get_contents( $git_plugin['local_path'] . '.git/HEAD' ) ), 2 ) );
 				$git_plugin['branch'] = preg_replace( "/\r|\n/", '', $git_branch );
 			}
@@ -279,7 +243,6 @@ class Plugin {
 		$config = apply_filters( 'gu_config_pre_process', $this->config );
 
 		$disable_wp_cron = (bool) apply_filters( 'gu_disable_wpcron', false );
-		$disable_wp_cron = $disable_wp_cron ?: (bool) apply_filters_deprecated( 'github_updater_disable_wpcron', [ false ], '10.0.0', 'gu_disable_wpcron' );
 
 		foreach ( (array) $config as $plugin ) {
 			if ( ! $this->waiting_for_background_update( $plugin ) || static::is_wp_cli() || $disable_wp_cron ) {
@@ -292,7 +255,7 @@ class Plugin {
 			if ( 'init' === current_filter()
 				&& ( ! is_multisite() || is_network_admin() )
 			) {
-				add_action( "after_plugin_row_{$plugin->file}", [ new Branch(), 'plugin_branch_switcher' ], 15, 3 );
+				add_action( "after_plugin_row_{$plugin->file}", [ new Branch(), 'plugin_branch_switcher' ], 15, 1 );
 			}
 		}
 
@@ -320,19 +283,18 @@ class Plugin {
 	/**
 	 * Put changelog in plugins_api, return WP.org data as appropriate
 	 *
-	 * @param bool      $result   Default false.
-	 * @param string    $action   The type of information being requested from the Plugin Installation API.
-	 * @param \stdClass $response Plugin API arguments.
+	 * @param bool     $result   Default false.
+	 * @param string   $action   The type of information being requested from the Plugin Installation API.
+	 * @param stdClass $response Plugin API arguments.
 	 *
 	 * @return mixed
 	 */
 	public function plugins_api( $result, $action, $response ) {
-		if ( ! ( 'plugin_information' === $action ) ) {
+		if ( 'plugin_information' !== $action ) {
 			return $result;
 		}
 
 		$plugin = isset( $response->slug, $this->config[ $response->slug ] ) ? $this->config[ $response->slug ] : false;
-		$result = $this->set_no_api_check_readme_changes( $result, $plugin );
 
 		// Skip if waiting for background update.
 		if ( $this->waiting_for_background_update( $plugin ) ) {
@@ -344,6 +306,7 @@ class Plugin {
 			return $result;
 		}
 
+		$response->did         = $plugin->did;
 		$response->slug        = $plugin->slug;
 		$response->plugin_name = $plugin->name;
 		$response->name        = $plugin->name;
@@ -353,14 +316,15 @@ class Plugin {
 		$response->version     = $plugin->remote_version ?: $plugin->local_version;
 		$response->sections    = $plugin->sections;
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
-		$response->short_description = substr( strip_tags( trim( $plugin->sections['description'] ) ), 0, 175 ) . '...';
+		$response->short_description = substr( strip_tags( trim( $plugin->sections['description'] ) ), 0, 147 ) . '...';
 		$response->requires          = $plugin->requires;
 		$response->requires_php      = $plugin->requires_php;
 		$response->tested            = $plugin->tested;
 		$response->downloaded        = $plugin->downloaded ?: 0;
 		$response->active_installs   = $response->downloaded;
-		$response->last_updated      = $plugin->last_updated ?: null;
-		$response->download_link     = $plugin->download_link ?: null;
+		$response->last_updated      = $plugin->last_updated ?: '';
+		$response->added             = $plugin->added ?: '';
+		$response->download_link     = $plugin->download_link ?: '';
 		$response->banners           = $plugin->banners;
 		$response->icons             = $plugin->icons ?: [];
 		$response->contributors      = $plugin->contributors;
@@ -373,14 +337,14 @@ class Plugin {
 	/**
 	 * Hook into site_transient_update_plugins to update from GitHub.
 	 *
-	 * @param \stdClass $transient Plugin update transient.
+	 * @param stdClass $transient Plugin update transient.
 	 *
 	 * @return mixed
 	 */
 	public function update_site_transient( $transient ) {
 		// needed to fix PHP 7.4 warning.
-		if ( ! \is_object( $transient ) ) {
-			$transient = new \stdClass();
+		if ( ! is_object( $transient ) ) {
+			$transient = new stdClass();
 		}
 
 		/**
@@ -449,7 +413,6 @@ class Plugin {
 					}
 
 					$overrides = apply_filters( 'gu_override_dot_org', [] );
-					$overrides = empty( $overrides ) ? apply_filters_deprecated( 'github_updater_override_dot_org', [ [] ], '10.0.0', 'gu_override_dot_org' ) : $overrides;
 
 					if ( isset( $transient->response[ $plugin->file ] ) && in_array( $plugin->file, $overrides, true ) ) {
 						unset( $transient->response[ $plugin->file ] );

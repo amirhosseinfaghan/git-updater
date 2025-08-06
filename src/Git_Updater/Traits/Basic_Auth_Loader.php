@@ -39,6 +39,7 @@ trait Basic_Auth_Loader {
 		if ( null !== $args['filename'] ) {
 			$args = array_merge( $args, $this->add_auth_header( $args, $url ) );
 			$args = array_merge( $args, $this->unset_release_asset_auth( $args, $url ) );
+			$args = array_merge( $args, $this->add_accept_header( $args ) );
 		}
 		remove_filter( 'http_request_args', [ $this, 'download_package' ] );
 
@@ -62,7 +63,8 @@ trait Basic_Auth_Loader {
 		}
 		if ( null !== $credentials['token'] ) {
 			if ( 'github' === $credentials['type'] ) {
-				$args['headers']['Authorization'] = 'token ' . $credentials['token'];
+				$args['headers']['Authorization'] = 'Bearer ' . $credentials['token'];
+				$args['headers']['github']        = $credentials['slug'];
 			}
 
 			/**
@@ -73,6 +75,9 @@ trait Basic_Auth_Loader {
 			 * @param array $credentials Array of repository credential data.
 			 */
 			$args = apply_filters( 'gu_get_auth_header', $args, $credentials );
+
+		} elseif ( null !== $credentials['type'] ) { // No access token.
+			$args['headers'][ $credentials['type'] ] = $credentials['slug'];
 		}
 		$args['headers'] = $args['headers'] ?? [];
 
@@ -89,14 +94,24 @@ trait Basic_Auth_Loader {
 	 * @return array $credentials
 	 */
 	private function get_credentials( $url ) {
-		$options     = get_site_option( 'git_updater' );
-		$headers     = parse_url( $url );
+		$options = get_site_option( 'git_updater' );
+		$headers = parse_url( $url );
+
+		/**
+		 * Filter hook to set an API domain for updating.
+		 *
+		 * @since 12.6.0
+		 * @param string Default is 'api.wordpress.org'.
+		 */
+		$api_domain = apply_filters( 'gu_api_domain', 'api.wordpress.org' );
+
 		$credentials = [
-			'api.wordpress' => 'api.wordpress.org' === isset( $headers['host'] ) ? $headers['host'] : false,
+			'api.wordpress' => isset( $headers['host'] ) === $api_domain ? $headers['host'] : false,
 			'isset'         => false,
 			'token'         => null,
 			'type'          => null,
 			'enterprise'    => null,
+			'slug'          => null,
 		];
 
 		if ( $credentials['api.wordpress'] ) {
@@ -124,6 +139,7 @@ trait Basic_Auth_Loader {
 			$credentials['isset']      = true;
 			$credentials['token']      = $token ?? null;
 			$credentials['enterprise'] = ! in_array( $headers['host'], [ 'github.com', 'api.github.com' ], true );
+			$credentials['slug']       = $slug;
 		}
 
 		// Filter hook args.
@@ -197,6 +213,12 @@ trait Basic_Auth_Loader {
 					$slug = $key;
 					break;
 				}
+				if ( isset( $this->type->gist_id ) ) {
+					if ( $key === $this->type->gist_id ) {
+						$slug = $this->type->slug;
+						break;
+					}
+				}
 			}
 		}
 
@@ -252,9 +274,9 @@ trait Basic_Auth_Loader {
 	 *
 	 * @return array $args
 	 */
-	private function unset_release_asset_auth( $args, $url ) {
+	final public function unset_release_asset_auth( $args, $url ) {
 		$releases            = false;
-		$release_asset_parts = [ 's3.amazonaws.com', 'releases/download', 'github-releases', 'release-asset' ];
+		$release_asset_parts = [ 's3.amazonaws.com', 'objects.githubusercontent.com', 'X-Amz-' ];
 		foreach ( $release_asset_parts as $part ) {
 			if ( str_contains( $url, $part ) ) {
 				$releases = true;
@@ -264,6 +286,29 @@ trait Basic_Auth_Loader {
 
 		if ( $releases ) {
 			unset( $args['headers']['Authorization'] );
+		}
+
+		return $args;
+	}
+
+	/**
+	 * Add Accept HTTP header.
+	 *
+	 * @param array $args The URL arguments passed.
+	 *
+	 * @return array $args
+	 */
+	final public function add_accept_header( $args ) {
+		$repo_cache = [];
+		foreach ( $args['headers'] as $key => $value ) {
+			if ( in_array( $key, [ 'github','gist','bitbucket','gitlab','gitea' ], true ) ) {
+				$repo_cache = $this->get_repo_cache( $value );
+				unset( $args['headers'][ $key ] );
+			}
+		}
+		if ( isset( $repo_cache['release_asset_download'] ) ) {
+			$octet_stream    = [ 'Accept' => 'application/octet-stream' ];
+			$args['headers'] = array_merge( $args['headers'], $octet_stream );
 		}
 
 		return $args;

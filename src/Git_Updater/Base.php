@@ -15,6 +15,12 @@ use Fragen\Git_Updater\Traits\GU_Trait;
 use Fragen\Git_Updater\Traits\Basic_Auth_Loader;
 use Fragen\Git_Updater\API\Language_Pack_API;
 use Fragen\Git_Updater\Branch;
+use Plugin_Upgrader;
+use ReflectionClass;
+use stdClass;
+use Theme_Upgrader;
+use WP_Error;
+use WP_Upgrader;
 
 /*
  * Exit if called directly.
@@ -77,28 +83,28 @@ class Base {
 	 * Stores the object calling Basic_Auth_Loader.
 	 *
 	 * @access public
-	 * @var \stdClass
+	 * @var stdClass
 	 */
 	public $caller;
 
 	/**
 	 * Store details of all repositories that are installed.
 	 *
-	 * @var \stdClass
+	 * @var stdClass
 	 */
 	protected $config;
 
 	/**
 	 * Holds plugin data.
 	 *
-	 * @var \stdClass
+	 * @var stdClass
 	 */
 	protected $plugin;
 
 	/**
 	 * Holds theme data.
 	 *
-	 * @var \stdClass
+	 * @var stdClass
 	 */
 	protected $theme;
 
@@ -121,7 +127,7 @@ class Base {
 		 * @since 10.0.0
 		 * @param array static::$git_servers Array of git servers.
 		 */
-		static::$git_servers = \apply_filters( 'gu_git_servers', static::$git_servers );
+		static::$git_servers = apply_filters( 'gu_git_servers', static::$git_servers );
 
 		/**
 		 * Filter to add installed APIs.
@@ -129,7 +135,7 @@ class Base {
 		 * @since 10.0.0
 		 * @param array static::$installed_apis Array of installed APIs.
 		 */
-		static::$installed_apis = \apply_filters( 'gu_installed_apis', static::$installed_apis );
+		static::$installed_apis = apply_filters( 'gu_installed_apis', static::$installed_apis );
 	}
 
 	/**
@@ -138,21 +144,6 @@ class Base {
 	 * @return bool
 	 */
 	public function load() {
-		/**
-		 * Filters whether to hide settings.
-		 *
-		 * @since 10.0.0
-		 * @param bool
-		 */
-		$hide_settings = (bool) apply_filters( 'gu_hide_settings', false );
-
-		/**
-		 * Filters whether to hide settings.
-		 *
-		 * @return bool
-		 */
-		$hide_settings = $hide_settings ?: (bool) apply_filters_deprecated( 'github_updater_hide_settings', [ false ], '10.0.0', 'gu_hide_settings' );
-
 		if ( Singleton::get_instance( 'Init', $this )->can_update() ) {
 			Singleton::get_instance( 'Settings', $this )->run();
 			Singleton::get_instance( 'Add_Ons', $this )->load_hooks();
@@ -173,13 +164,6 @@ class Base {
 		}
 
 		if ( isset( $_POST['_wpnonce'], $_POST['gu_refresh_cache'] ) && wp_verify_nonce( sanitize_key( wp_unslash( $_POST['_wpnonce'] ) ), 'gu_refresh_cache' ) ) {
-			/**
-			 * Fires later in cycle when Refreshing Cache.
-			 *
-			 * @since 6.0.0
-			 */
-			do_action_deprecated( 'ghu_refresh_transients', [], '10.0.0', 'gu_refresh_transients' );
-
 			/**
 			 * Fires later in cycle when Refreshing Cache.
 			 *
@@ -239,13 +223,6 @@ class Base {
 		 */
 		$config = apply_filters( 'gu_set_options', [] );
 
-		/**
-		 * Filter the plugin options.
-		 *
-		 * @return null|array
-		 */
-		$config = empty( $config ) ? apply_filters_deprecated( 'github_updater_set_options', [ [] ], '6.1.0', 'gu_set_options' ) : $config;
-
 		foreach ( array_keys( self::$git_servers ) as $git ) {
 			unset( $config[ "{$git}_access_token" ], $config[ "{$git}_enterprise_token" ] );
 		}
@@ -267,6 +244,9 @@ class Base {
 			'RequiresWP'    => 'Requires WP',
 			'ReleaseAsset'  => 'Release Asset',
 			'PrimaryBranch' => 'Primary Branch',
+			'PluginID'      => 'Plugin ID',
+			'ThemeID'       => 'Theme ID',
+			'Security'      => 'Security',
 		];
 
 		$uri_types = [
@@ -304,9 +284,9 @@ class Base {
 	 * Get remote repo meta data for plugins or themes.
 	 * Calls remote APIs for data.
 	 *
-	 * @param \stdClass $repo Repo object.
+	 * @param stdClass $repo Repo object.
 	 *
-	 * @return bool|\stdClass
+	 * @return bool|stdClass
 	 */
 	public function get_remote_repo_meta( $repo ) {
 		// Exit if non-privileged user and bypassing wp-cron.
@@ -319,13 +299,6 @@ class Base {
 		 * @param bool
 		 */
 		$disable_wp_cron = (bool) apply_filters( 'gu_disable_wpcron', false );
-
-		/**
-		 * Exit if bypassing wp-cron.
-		 *
-		 * @return bool
-		 */
-		$disable_wp_cron = $disable_wp_cron ?: (bool) apply_filters_deprecated( 'github_updater_disable_wpcron', [ false ], '10.0.0', 'gu_disable_wpcron' );
 
 		if ( $disable_wp_cron && ! Singleton::get_instance( 'Init', $this )->can_update() ) {
 			return;
@@ -346,14 +319,11 @@ class Base {
 
 		if ( $repo_api->get_remote_info( $file ) ) {
 			if ( ! self::is_wp_cli() ) {
-				if ( ! apply_filters( 'github_updater_run_at_scale', false ) ) {
-					$repo_api->get_repo_meta();
-					$changelog = $this->get_changelog_filename( $repo );
-					if ( $changelog ) {
-						$repo_api->get_remote_changes( $changelog );
-					}
-					$repo_api->get_remote_readme();
-				}
+				$repo_api->get_repo_contents();
+				$repo_api->get_remote_readme();
+				$repo_api->get_remote_changes( '' );
+				$repo_api->get_repo_meta();
+				$repo_api->get_repo_assets();
 				if ( ! empty( self::$options['branch_switch'] ) ) {
 					$repo_api->get_remote_branches();
 				}
@@ -362,12 +332,17 @@ class Base {
 			$repo->download_link = $repo_api->construct_download_link();
 			$language_pack       = new Language_Pack( $repo, new Language_Pack_API( $repo ) );
 			$language_pack->run();
+			$this->add_assets( $repo_api );
 		}
+
+		do_action( 'get_remote_repo_meta', $repo, $repo_api );
 
 		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_debug_backtrace
 		$caller = debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 2 )[1]['class'];
 		// Return data if being called from Git Updater REST API.
-		if ( 'Fragen\Git_Updater\REST\REST_API' === $caller ) {
+		if ( 'Fragen\Git_Updater\REST\REST_API' === $caller
+			|| 'Fragen\Git_Updater\Init' === $caller
+		) {
 			return $repo;
 		}
 
@@ -381,7 +356,7 @@ class Base {
 	 */
 	protected function set_defaults( $type ) {
 		if ( ! isset( $this->$type->slug ) ) {
-			$this->$type       = new \stdClass();
+			$this->$type       = new stdClass();
 			$this->$type->slug = '';
 		} elseif ( ! isset( self::$options[ $this->$type->slug ] ) ) {
 			self::$options[ $this->$type->slug ] = '';
@@ -392,7 +367,6 @@ class Base {
 		$this->$type->newest_tag     = '0.0.0';
 		$this->$type->download_link  = '';
 		$this->$type->tags           = [];
-		$this->$type->rollback       = [];
 		$this->$type->branches       = [];
 		$this->$type->requires       = '';
 		$this->$type->tested         = '';
@@ -400,6 +374,7 @@ class Base {
 		$this->$type->contributors   = [];
 		$this->$type->downloaded     = 0;
 		$this->$type->last_updated   = '';
+		$this->$type->added          = '';
 		$this->$type->rating         = 0;
 		$this->$type->num_ratings    = 0;
 		$this->$type->transient      = [];
@@ -412,29 +387,47 @@ class Base {
 	}
 
 	/**
-	 * Get filename of changelog and return.
+	 * Add assets from remote repo.
 	 *
-	 * @param \stdClass $repo Repo object.
+	 * @param GitHub_API|Bitbucket_API|GitLab_API|Gitea_API $repo API object.
 	 *
-	 * @return bool|string
+	 * @return void
 	 */
-	public function get_changelog_filename( $repo ) {
-		$changelogs  = [ 'CHANGES.md', 'CHANGELOG.md', 'changes.md', 'changelog.md' ];
-		$changes     = null;
-		$local_files = null;
+	public function add_assets( $repo ) {
+		$assets = $repo->response['assets'] ?? false;
 
-		if ( is_dir( $repo->local_path ) ) {
-			$local_files = scandir( $repo->local_path, 0 );
+		if ( ! $assets || is_object( $assets ) ) {
+			return;
 		}
-
-		$changes = array_intersect( (array) $local_files, $changelogs );
-		$changes = array_pop( $changes );
-
-		if ( ! empty( $changes ) ) {
-			return $changes;
+		$banner_sizes = [
+			'low_png'      => 'banner-772x250.png',
+			'low_jpg'      => 'banner-772x250.jpg',
+			'low_png_rtl'  => 'banner-772x250-rtl.png',
+			'low_jpg_rtl'  => 'banner-772x250-rtl.jpg',
+			'high_png'     => 'banner-1544x500.png',
+			'high_jpg'     => 'banner-1544x500.jpg',
+			'high_png_rtl' => 'banner-1544x500-rtl.png',
+			'high_jpg_rtl' => 'banner-1544x500-rtl.jpg',
+		];
+		$icons        = [
+			'svg'    => 'icon.svg',
+			'1x_png' => 'icon-128x128.png',
+			'1x_jpg' => 'icon-128x128.jpg',
+			'2x_png' => 'icon-256x256.png',
+			'2x_jpg' => 'icon-256x256.jpg',
+		];
+		foreach ( $banner_sizes as $key => $size ) {
+			if ( isset( $assets[ $size ] ) ) {
+				$key                         = preg_replace( '/_png|_jpg|_rtl/', '', $key );
+				$repo->type->banners[ $key ] = $assets[ $size ];
+			}
 		}
-
-		return false;
+		foreach ( $icons as $key => $filename ) {
+			if ( isset( $assets[ $filename ] ) ) {
+				$key                       = preg_replace( '/_png|_jpg/', '', $key );
+				$repo->type->icons[ $key ] = $assets[ $filename ];
+			}
+		}
 	}
 
 	/**
@@ -442,14 +435,14 @@ class Base {
 	 *
 	 * @since WordPress 4.4.0 The $hook_extra parameter became available.
 	 *
-	 * @param string                           $source        File path of $source.
-	 * @param string                           $remote_source File path of $remote_source.
-	 * @param \Plugin_Upgrader|\Theme_Upgrader $upgrader      An Upgrader object.
-	 * @param array                            $hook_extra    Array of hook data.
+	 * @param string      $source        File path of $source.
+	 * @param string      $remote_source File path of $remote_source.
+	 * @param WP_Upgrader $upgrader      An Upgrader object.
+	 * @param array       $hook_extra    Array of hook data.
 	 *
-	 * @return string|\WP_Error
+	 * @return string|WP_Error
 	 */
-	public function upgrader_source_selection( $source, $remote_source, $upgrader, $hook_extra = null ) {
+	public function upgrader_source_selection( string $source, string $remote_source, WP_Upgrader $upgrader, $hook_extra = [] ) {
 		global $wp_filesystem;
 
 		$slug            = null;
@@ -461,10 +454,13 @@ class Base {
 		/*
 		 * Rename plugins.
 		 */
-		if ( $upgrader instanceof \Plugin_Upgrader ) {
+		if ( $upgrader instanceof Plugin_Upgrader ) {
 			$upgrader_object = Singleton::get_instance( 'Plugin', $this );
 			if ( isset( $hook_extra['plugin'] ) ) {
 				$slug       = dirname( $hook_extra['plugin'] );
+				$new_source = trailingslashit( $remote_source ) . $slug;
+			} elseif ( wp_doing_ajax() && check_ajax_referer( 'updates' ) && isset( $_POST['slug'] ) ) {
+				$slug       = sanitize_key( wp_unslash( $_POST['slug'] ) );
 				$new_source = trailingslashit( $remote_source ) . $slug;
 			}
 		}
@@ -472,10 +468,13 @@ class Base {
 		/*
 		 * Rename themes.
 		 */
-		if ( $upgrader instanceof \Theme_Upgrader ) {
+		if ( $upgrader instanceof Theme_Upgrader ) {
 			$upgrader_object = Singleton::get_instance( 'Theme', $this );
 			if ( isset( $hook_extra['theme'] ) ) {
 				$slug       = $hook_extra['theme'];
+				$new_source = trailingslashit( $remote_source ) . $slug;
+			} elseif ( wp_doing_ajax() && check_ajax_referer( 'updates' ) && isset( $_POST['slug'] ) ) {
+				$slug       = sanitize_key( wp_unslash( $_POST['slug'] ) );
 				$new_source = trailingslashit( $remote_source ) . $slug;
 			}
 		}
@@ -502,14 +501,19 @@ class Base {
 
 		$new_source = $this->fix_misnamed_directory( $new_source, $remote_source, $upgrader_object, $slug );
 
+		if ( basename( dirname( $source ) ) === basename( $new_source ) ) {
+			$new_source = $source;
+		}
+
 		if ( trailingslashit( strtolower( $source ) ) !== trailingslashit( strtolower( $new_source ) ) ) {
 			$result = move_dir( $source, $new_source, true );
-			if ( \is_wp_error( $result ) ) {
+			if ( is_wp_error( $result ) ) {
 				return $result;
 			}
 		}
+
 		// Clean up $new_source directory.
-		add_action( 'upgrader_install_package_result', [ $this, 'delete_upgrade_source' ], 10, 2 );
+		add_action( 'upgrader_install_package_result', [ $this, 'delete_upgrade_source' ], 10, 1 );
 
 		return trailingslashit( $new_source );
 	}
@@ -527,11 +531,25 @@ class Base {
 	 * @return string $new_source
 	 */
 	private function fix_misnamed_directory( $new_source, $remote_source, $upgrader_object, $slug ) {
-		$config = $this->get_class_vars( ( new \ReflectionClass( $upgrader_object ) )->getShortName(), 'config' );
+		$config = $upgrader_object instanceof Plugin ? $upgrader_object->get_plugin_configs() : [];
+		$config = $upgrader_object instanceof Theme ? $upgrader_object->get_theme_configs() : $config;
+
+		$parts          = explode( '-', $slug );
+		$maybe_did_hash = array_pop( $parts );
+		$maybe_slug     = implode( '-', $parts );
+		if ( isset( $config[ $maybe_slug ], $config[ $maybe_slug ]->slug_did ) ) {
+			if ( $maybe_did_hash === $this->get_did_hash( $config[ $maybe_slug ]->did ) ) {
+				return trailingslashit( $remote_source ) . $config[ $maybe_slug ]->slug_did;
+			}
+		}
+
+		if ( basename( $new_source ) === $slug ) {
+			return $new_source;
+		}
 
 		if ( ! array_key_exists( $slug, (array) $config ) && ! isset( self::$options['remote_install'] ) ) {
 			$repo         = $this->get_repo_slugs( $slug, $upgrader_object );
-			$repo['slug'] = isset( $repo['slug'] ) ? $repo['slug'] : $slug;
+			$repo['slug'] = $repo['slug'] ?? $slug;
 			$slug         = $slug === $repo['slug'] ? $slug : $repo['slug'];
 			$new_source   = trailingslashit( $remote_source ) . $slug;
 		}
@@ -671,21 +689,6 @@ class Base {
 		 * @param string $type Type being passed, plugin|theme'.
 		 */
 		$additions = apply_filters( 'gu_additions', null, [], $type );
-
-		/**
-		 * Filter to add plugins not containing appropriate header line.
-		 * Insert repositories added via Git Updater Additions plugin.
-		 *
-		 * @since   5.4.0
-		 * @access  public
-		 * @link https://github.com/afragen/git-updater-additions
-		 *
-		 * @param array        Listing of plugins/themes to add.
-		 *                     Default null.
-		 * @param array        Listing of all plugins/themes.
-		 * @param string $type Type being passed, plugin|theme'.
-		 */
-		$additions = null === $additions ? apply_filters_deprecated( 'github_updater_additions', [ null, [], $type ], '10.0.0', 'gu_additions' ) : $additions;
 
 		foreach ( (array) $additions as $slug => $headers ) {
 			if ( $slug === $file ) {

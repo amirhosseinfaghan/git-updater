@@ -10,6 +10,11 @@
 
 namespace Fragen\Git_Updater;
 
+use Fragen\Git_Updater\Traits\GU_Trait;
+use Freemius;
+use FS_Plugin_Updater;
+use stdClass;
+
 /*
  * Exit if called directly.
  */
@@ -22,6 +27,7 @@ if ( ! defined( 'WPINC' ) ) {
  * Freemius 'start.php' autoloaded via composer.
  */
 class GU_Freemius {
+	use GU_Trait;
 
 	/**
 	 * Freemius integration.
@@ -34,7 +40,7 @@ class GU_Freemius {
 			/**
 			 * Create a helper function for easy SDK access.
 			 *
-			 * @return \stdClass
+			 * @return stdClass
 			 */
 			function gu_fs() {
 				global $gu_fs;
@@ -102,7 +108,9 @@ class GU_Freemius {
 		$this->remove_fs_plugin_updater_hooks( $gu_fs );
 
 		// Hopefully eliminate clone resolution popup as single license for unlimited sites.
-		define( 'FS__RESOLVE_CLONE_AS', 'long_term_duplicate' );
+		if ( ! defined( 'FS__RESOLVE_CLONE_AS' ) ) {
+			define( 'FS__RESOLVE_CLONE_AS', 'long_term_duplicate' );
+		}
 	}
 
 	/**
@@ -160,13 +168,13 @@ class GU_Freemius {
 	 * Remove FS_Plugin_Updater hooks.
 	 * Allow Git Updater to use it's own update code for itself.
 	 *
-	 * @param \Freemius $gu_fs Freemius object.
+	 * @param Freemius $gu_fs Freemius object.
 	 *
 	 * @return void
 	 */
-	public function remove_fs_plugin_updater_hooks( \Freemius $gu_fs ) {
-		$FS_Plugin_Updater = \FS_Plugin_Updater::instance( $gu_fs );
-		$plugin_name       = 'git-updater/git-updater.php';
+	public function remove_fs_plugin_updater_hooks( Freemius $gu_fs ) {
+		$FS_Plugin_Updater = FS_Plugin_Updater::instance( $gu_fs );
+		$plugin_names      = [ 'git-updater/git-updater.php', 'git-updater-' . $this->get_did_hash( 'did:plc:afjf7gsjzsqmgc7dlhb553mv' ) . '/git-updater.php' ];
 
 		// Bypass Freemius update-core.php dialog.
 		remove_filter( 'admin_init', [ $gu_fs, '_add_premium_version_upgrade_selection' ] );
@@ -176,22 +184,25 @@ class GU_Freemius {
 		remove_action( 'admin_head', [ $FS_Plugin_Updater, 'catch_plugin_information_dialog_contents' ] );
 
 		// Remove Freemius plugin row modifications.
-		remove_action(
-			"after_plugin_row_{$plugin_name}",
-			[
-				$FS_Plugin_Updater,
-				'catch_plugin_update_row',
-			],
-			9
-		);
-		remove_action(
-			"after_plugin_row_{$plugin_name}",
-			[
-				$FS_Plugin_Updater,
-				'edit_and_echo_plugin_update_row',
-			],
-			11
-		);
+		foreach ( $plugin_names as $plugin_name ) {
+					remove_action(
+						"after_plugin_row_{$plugin_name}",
+						[
+							$FS_Plugin_Updater,
+							'catch_plugin_update_row',
+						],
+						9
+					);
+			remove_action(
+				"after_plugin_row_{$plugin_name}",
+				[
+					$FS_Plugin_Updater,
+					'edit_and_echo_plugin_update_row',
+				],
+				11
+			);
+
+		}
 
 		// Remove Freemius 'update_plugins' transient filter.
 		remove_filter(

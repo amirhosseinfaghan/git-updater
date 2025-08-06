@@ -12,6 +12,7 @@ namespace Fragen\Git_Updater;
 
 use Fragen\Singleton;
 use Fragen\Git_Updater\Traits\GU_Trait;
+use stdClass;
 
 /*
  * Exit if called directly.
@@ -74,7 +75,7 @@ class Branch {
 	 *
 	 * @access public
 	 *
-	 * @param \stdClass $repo Repository object.
+	 * @param stdClass $repo Repository object.
 	 *
 	 * @return mixed
 	 */
@@ -90,8 +91,8 @@ class Branch {
 	/**
 	 * Update transient for rollback or branch switch.
 	 *
-	 * @param string    $type plugin|theme.
-	 * @param \stdClass $repo Repo object.
+	 * @param string   $type plugin|theme.
+	 * @param stdClass $repo Repo object.
 	 *
 	 * @return array $rollback Rollback transient.
 	 */
@@ -101,18 +102,6 @@ class Branch {
 		$this->tag     = isset( $_GET['rollback'] ) ? sanitize_text_field( wp_unslash( $_GET['rollback'] ) ) : false;
 		$slug          = 'plugin' === $type ? $repo->file : $repo->slug;
 		$download_link = $repo_api->construct_download_link( $this->tag );
-
-		/**
-		 * Filter download link so developers can point to specific ZipFile
-		 * to use as a download link during a branch switch.
-		 *
-		 * @since 8.6.0
-		 *
-		 * @param string    $download_link Download URL.
-		 * @param /stdClass $repo
-		 * @param string    $this->tag     Branch or tag for rollback.
-		 */
-		$download_link = apply_filters_deprecated( 'github_updater_post_construct_download_link', [ $download_link, $repo, $this->tag ], '10.0.0', 'gu_post_construct_download_link' );
 
 		/**
 		 * Filter download link so developers can point to specific ZipFile
@@ -205,12 +194,11 @@ class Branch {
 	/**
 	 * Add branch switch row to plugins page.
 	 *
-	 * @param string    $plugin_file Plugin file.
-	 * @param \stdClass $plugin_data Plugin repo data.
+	 * @param string $plugin_file Plugin file.
 	 *
 	 * @return bool
 	 */
-	public function plugin_branch_switcher( $plugin_file, $plugin_data ) {
+	public function plugin_branch_switcher( $plugin_file ) {
 		if ( empty( self::$options['branch_switch'] ) ) {
 			return false;
 		}
@@ -260,11 +248,10 @@ class Branch {
 	 * Create branch switcher row for theme multisite installation.
 	 *
 	 * @param string $theme_key Theme slug.
-	 * @param array  $theme     Array of theme data.
 	 *
 	 * @return bool
 	 */
-	public function multisite_branch_switcher( $theme_key, $theme ) {
+	public function multisite_branch_switcher( $theme_key ) {
 		if ( empty( self::$options['branch_switch'] ) ) {
 			return false;
 		}
@@ -307,7 +294,7 @@ class Branch {
 	/**
 	 * Display rollback/branch switcher for theme single site installation.
 	 *
-	 * @param \stdClass $theme Theme object.
+	 * @param stdClass $theme Theme object.
 	 *
 	 * @return string
 	 */
@@ -322,7 +309,7 @@ class Branch {
 		if ( '1' === self::$options['branch_switch'] ) {
 			printf(
 				/* translators: 1: branch name, 2: jQuery dropdown, 3: closing tag */
-				'<p>' . esc_html__( 'Current branch is `%1$s`, try %2$sanother version%3$s', 'git-updater-pro' ),
+				'<p>' . esc_html__( 'Current branch is `%1$s`, try %2$sanother version%3$s', 'git-updater' ),
 				esc_attr( $theme->branch ),
 				'<a href="#" onclick="jQuery(\'#gu_versions\').toggle();return false;">',
 				'</a>.</p>'
@@ -330,7 +317,7 @@ class Branch {
 			?>
 			<div id="gu_versions" style="display:none; width: 100%;">
 				<label><select style="width: 60%;" onchange="if(jQuery(this).val() != '') { jQuery(this).parent().next().show(); jQuery(this).parent().next().attr('href','<?php echo esc_url( $rollback_url ); ?>'+jQuery(this).val()); } else jQuery(this).parent().next().hide();">
-				<option value=""><?php esc_html_e( 'Choose a Version', 'git-updater-pro' ); ?>&#8230;</option>
+				<option value=""><?php esc_html_e( 'Choose a Version', 'git-updater' ); ?>&#8230;</option>
 			<?php
 
 			// Disable branch switching to primary branch for release assets.
@@ -342,10 +329,8 @@ class Branch {
 					echo '<option>' . esc_attr( $branch ) . '</option>';
 				}
 			}
-			if ( ! empty( $theme->rollback ) ) {
-				$rollback = array_keys( $theme->rollback );
-				usort( $rollback, 'version_compare' );
-				krsort( $rollback );
+			if ( ! empty( $theme->tags ) ) {
+				uksort( $theme->tags, fn ( $a, $b ) => version_compare( ltrim( $b, 'v' ), trim( $a, 'v' ) ) );
 
 				/**
 				 * Filter to return the number of tagged releases (rollbacks) in branch switching.
@@ -355,29 +340,21 @@ class Branch {
 				 */
 				$num_rollbacks = absint( apply_filters( 'gu_number_rollbacks', 0 ) );
 
-				/**
-				 * Filter to return the number of tagged releases (rollbacks) in branch switching.
-				 *
-				 * @since 9.6.0
-				 * @param int Number of rollbacks. Zero implies value not set.
-				 */
-				$num_rollbacks = 0 === $num_rollbacks ? apply_filters_deprecated( 'github_updater_number_rollbacks', [ 0 ], '10.0.0', 'gu_number_rollbacks' ) : $num_rollbacks;
-
-				// Still only return last tag if using release assets.
-				$rollback = 0 === $num_rollbacks || $theme->release_asset
-					? array_slice( $rollback, 0, 1 )
-					: array_splice( $rollback, 0, $num_rollbacks, true );
+				$tag_keys = array_keys( $theme->tags );
+				$rollback = 0 === $num_rollbacks
+					? array_slice( $tag_keys, 0, 1 )
+					: array_splice( $tag_keys, 0, $num_rollbacks );
 
 				foreach ( $rollback as $tag ) {
 					echo '<option>' . esc_attr( $tag ) . '</option>';
 				}
 			}
-			if ( empty( $theme->rollback ) ) {
-				echo '<option>' . esc_html__( 'No previous tags to rollback to.', 'git-updater-pro' ) . '</option></select></label>';
+			if ( empty( $theme->tags ) ) {
+				echo '<option>' . esc_html__( 'No previous tags to rollback to.', 'git-updater' ) . '</option></select></label>';
 			}
 			?>
 					</select></label>
-				<a style="display: none;" class="button-primary" href="?"><?php esc_html_e( 'Install', 'git-updater-pro' ); ?></a>
+				<a style="display: none;" class="button-primary" href="?"><?php esc_html_e( 'Install', 'git-updater' ); ?></a>
 			</div>
 			<?php
 		}
@@ -394,7 +371,7 @@ class Branch {
 	 * @return void
 	 */
 	public function make_branch_switch_row( $data, $config ) {
-		$rollback = empty( $config[ $data['slug'] ]->rollback ) ? [] : $config[ $data['slug'] ]->rollback;
+		$rollback = empty( $config[ $data['slug'] ]->tags ) ? [] : $config[ $data['slug'] ]->tags;
 
 		// Make the branch switch row visually appear as if it is contained with the plugin/theme's row.
 		// We have to use JS for this because of the way:
@@ -424,7 +401,7 @@ class Branch {
 		echo wp_kses_post( $this->base->get_git_icon( $file, true ) );
 		printf(
 			/* translators: 1: branch name, 2: jQuery dropdown, 3: closing tag */
-			esc_html__( 'Current branch is `%1$s`, try %2$sanother version%3$s', 'git-updater-pro' ),
+			esc_html__( 'Current branch is `%1$s`, try %2$sanother version%3$s', 'git-updater' ),
 			esc_attr( $data['branch'] ),
 			'<a href="#" onclick="jQuery(\'#' . esc_attr( $data['id'] ) . '\').toggle();return false;">',
 			'</a>.'
@@ -448,22 +425,12 @@ class Branch {
 		 */
 		$no_release_asset_branches = (bool) apply_filters( 'gu_no_release_asset_branches', false );
 
-		/**
-		 * Filter out branches for release assets if desired.
-		 * Removes all branches from the branch switcher leaving only the tags.
-		 *
-		 * @since 9.9.1
-		 *
-		 * @return bool
-		 */
-		$no_release_asset_branches = $no_release_asset_branches ?: (bool) apply_filters_deprecated( 'github_updater_no_release_asset_branches', [ false ], '10.0.0', 'gu_no_release_asset_branches' );
-
 		$data['branches'] = $data['release_asset'] && $no_release_asset_branches ? [] : $data['branches'];
 
 		if ( null !== $data['branches'] ) {
 			foreach ( array_keys( $data['branches'] ) as $branch ) {
 				printf(
-					'<li><a href="%s%s" aria-label="' . esc_html__( 'Switch to branch ', 'git-updater-pro' ) . esc_attr( $branch ) . '">%s</a></li>',
+					'<li><a href="%1$s%2$s" aria-label="' . esc_html__( 'Switch to branch ', 'git-updater' ) . '%3$s">%3$s</a></li>',
 					esc_url( $data['nonced_update_url'] ),
 					'&rollback=' . rawurlencode( $branch ),
 					esc_attr( $branch )
@@ -472,9 +439,7 @@ class Branch {
 		}
 
 		if ( ! empty( $rollback ) ) {
-			$rollback = array_keys( $rollback );
-			usort( $rollback, 'version_compare' );
-			krsort( $rollback );
+			uksort( $rollback, fn ( $a, $b ) => version_compare( trim( $b, 'v' ), trim( $a, 'v' ) ) );
 
 			/**
 			 * Filter to return the number of tagged releases (rollbacks) in branch switching.
@@ -484,18 +449,10 @@ class Branch {
 			 */
 			$num_rollbacks = absint( apply_filters( 'gu_number_rollbacks', 0 ) );
 
-			/**
-			 * Filter to return the number of tagged releases (rollbacks) in branch switching.
-			 *
-			 * @since 9.6.0
-			 * @param int Number of rollbacks. Zero implies value not set.
-			 */
-			$num_rollbacks = 0 === $num_rollbacks ? absint( apply_filters_deprecated( 'github_updater_number_rollbacks', [ 0 ], '10.0.0', 'gu_number_rollbacks' ) ) : $num_rollbacks;
-
-			// Still only return last tag if using release assets.
-			$rollback = 0 === $num_rollbacks || $data['release_asset']
-				? array_slice( $rollback, 0, 1 )
-				: array_splice( $rollback, 0, $num_rollbacks, true );
+			$rollback_keys = array_keys( $rollback );
+			$rollback      = 0 === $num_rollbacks
+				? array_slice( $rollback_keys, 0, 1 )
+				: array_splice( $rollback_keys, 0, $num_rollbacks );
 
 			if ( $data['release_asset'] ) {
 				/**
@@ -507,15 +464,6 @@ class Branch {
 				 */
 				$release_asset_rollback = apply_filters( 'gu_release_asset_rollback', $rollback, $file );
 
-				/**
-				 * Filter release asset rollbacks.
-				 *
-				 * @since 9.9.2
-				 *
-				 * @return array
-				 */
-				$release_asset_rollback = apply_filters_deprecated( 'github_updater_release_asset_rollback', [ $rollback, $file ], '10.0.0', 'gu_release_asset_rollback' );
-
 				if ( ! empty( $release_asset_rollback ) && is_array( $release_asset_rollback ) ) {
 					$rollback = $release_asset_rollback;
 				}
@@ -523,7 +471,7 @@ class Branch {
 
 			foreach ( $rollback as $tag ) {
 				printf(
-					'<li><a href="%s%s" aria-label="' . esc_html__( 'Switch to release ', 'git-updater-pro' ) . esc_attr( $tag ) . '">%s</a></li>',
+					'<li><a href="%1$s%2$s" aria-label="' . esc_html__( 'Switch to release ', 'git-updater' ) . '%3$s">%3$s</a></li>',
 					esc_url( $data['nonced_update_url'] ),
 					'&rollback=' . rawurlencode( $tag ),
 					esc_attr( $tag )
@@ -531,7 +479,7 @@ class Branch {
 			}
 		}
 		if ( empty( $rollback ) ) {
-			echo '<li>' . esc_html__( 'No previous tags to rollback to.', 'git-updater-pro' ) . '</li>';
+			echo '<li>' . esc_html__( 'No previous tags to rollback to.', 'git-updater' ) . '</li>';
 		}
 
 		print '</ul>';

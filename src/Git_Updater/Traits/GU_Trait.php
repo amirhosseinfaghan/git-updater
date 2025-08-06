@@ -11,7 +11,12 @@
 namespace Fragen\Git_Updater\Traits;
 
 use Fragen\Singleton;
-use Fragen\Git_Updater\Readme_Parser;
+use ReflectionClass;
+use ReflectionObject;
+use stdClass;
+use WP_Error;
+
+use const Fragen\Git_Updater\PLUGIN_FILE;
 
 /**
  * Trait GU_Trait
@@ -129,18 +134,6 @@ trait GU_Trait {
 		/**
 		 * Allow filtering of cache timeout for repo information.
 		 *
-		 * @since 8.7.1
-		 *
-		 * @param string      $timeout  Timeout value used with strtotime().
-		 * @param string      $id       Data Identifier.
-		 * @param mixed       $response Data to be stored.
-		 * @param string|bool $repo     Repo name or false.
-		 */
-		$timeout = apply_filters_deprecated( 'github_updater_repo_cache_timeout', [ $timeout, $id, $response, $repo ], '10.0.0', 'gu_repo_cache_timeout' );
-
-		/**
-		 * Allow filtering of cache timeout for repo information.
-		 *
 		 * @since 10.0.0
 		 *
 		 * @param string      $timeout  Timeout value used with strtotime().
@@ -168,7 +161,7 @@ trait GU_Trait {
 	 */
 	final public function get_class_vars( $class_name, $name ) {
 		$class          = Singleton::get_instance( $class_name, $this );
-		$reflection_obj = new \ReflectionObject( $class );
+		$reflection_obj = new ReflectionObject( $class );
 		if ( ! $reflection_obj->hasProperty( $name ) ) {
 			return false;
 		}
@@ -190,20 +183,18 @@ trait GU_Trait {
 	/**
 	 * Function to check if plugin or theme object is able to be updated.
 	 *
-	 * @param \stdClass $type Repo object.
+	 * @param stdClass $type Repo object.
 	 *
 	 * @return bool
 	 */
 	final public function can_update_repo( $type ) {
-		$wp_version = get_bloginfo( 'version' );
-
 		$wp_version_ok   = ! empty( $type->requires )
-			? version_compare( $wp_version, $type->requires, '>=' )
+			? is_wp_version_compatible( $type->requires )
 			: true;
 		$php_version_ok  = ! empty( $type->requires_php )
-			? version_compare( phpversion(), $type->requires_php, '>=' )
+			? is_php_version_compatible( $type->requires_php )
 			: true;
-		$remote_is_newer = isset( $type->remote_version )
+		$remote_is_newer = isset( $type->remote_version, $type->local_version )
 			? version_compare( $type->remote_version, $type->local_version, '>' )
 			: false;
 
@@ -211,18 +202,10 @@ trait GU_Trait {
 		 * Filter $remote_is_newer if you use another method to test for updates.
 		 *
 		 * @since 10.0.0
-		 * @param bool      $remote_is_newer
-		 * @param \stdClass $type            Plugin/Theme data.
+		 * @param bool     $remote_is_newer
+		 * @param stdClass $type            Plugin/Theme data.
 		 */
 		$remote_is_newer = apply_filters( 'gu_remote_is_newer', $remote_is_newer, $type );
-
-		/**
-		 * Filter $remote_is_newer if you use another method to test for updates.
-		 *
-		 * @param bool      $remote_is_newer
-		 * @param \stdClass $type            Plugin/Theme data.
-		 */
-		$remote_is_newer = $remote_is_newer ?: apply_filters_deprecated( 'github_updater_remote_is_newer', [ $remote_is_newer, $type ], '10.0.0', 'gu_remote_is_newer' );
 
 		return $remote_is_newer && $wp_version_ok && $php_version_ok;
 	}
@@ -235,9 +218,15 @@ trait GU_Trait {
 	final public function delete_all_cached_data() {
 		global $wpdb;
 
-		$table         = is_multisite() ? $wpdb->base_prefix . 'sitemeta' : $wpdb->base_prefix . 'options';
-		$column        = is_multisite() ? 'meta_key' : 'option_name';
-		$delete_string = 'DELETE FROM ' . $table . ' WHERE ' . $column . ' LIKE %s LIMIT 1000';
+		$table              = is_multisite() ? $wpdb->base_prefix . 'sitemeta' : $wpdb->base_prefix . 'options';
+		$column             = is_multisite() ? 'meta_key' : 'option_name';
+		$delete_string      = 'DELETE FROM ' . $table . ' WHERE ' . $column . ' LIKE %s LIMIT 1000';
+		$get_options_string = 'SELECT * FROM ' . $table . ' WHERE ' . $column . ' LIKE %s';
+
+		$ghu_options = $wpdb->get_results( $wpdb->prepare( $get_options_string, [ '%ghu-%' ] ) ); // phpcs:ignore
+		foreach ( $ghu_options as $option ) {
+			delete_site_option( $option->option_name );
+		}
 
 		$wpdb->query( $wpdb->prepare( $delete_string, [ '%ghu-%' ] ) ); // phpcs:ignore
 
@@ -251,7 +240,7 @@ trait GU_Trait {
 	 * Test for whether remote_version is set ( default = 0.0.0 ) or
 	 * a repo option is set/not empty.
 	 *
-	 * @param \stdClass $repo Repository.
+	 * @param stdClass $repo Repository.
 	 *
 	 * @return bool
 	 */
@@ -269,8 +258,8 @@ trait GU_Trait {
 	/**
 	 * Do we override dot org updates?
 	 *
-	 * @param string    $type (plugin|theme).
-	 * @param \stdClass $repo Repository object.
+	 * @param string   $type (plugin|theme).
+	 * @param stdClass $repo Repository object.
 	 *
 	 * @return bool
 	 */
@@ -284,12 +273,10 @@ trait GU_Trait {
 		$transient_key = 'theme' === $type ? $repo->slug : $transient_key;
 
 		$overrides = apply_filters( 'gu_override_dot_org', [] );
-		$overrides = empty( $overrides ) ? apply_filters_deprecated( 'github_updater_override_dot_org', [ [] ], '10.0.0', 'gu_override_dot_org' ) : $overrides;
-
-		$override = in_array( $transient_key, $overrides, true );
+		$override  = in_array( $transient_key, $overrides, true );
 
 		// Set $override if set in Skip Updates plugin.
-		if ( ! $override && \class_exists( '\\Fragen\\Skip_Updates\\Bootstrap' ) ) {
+		if ( ! $override && class_exists( '\\Fragen\\Skip_Updates\\Bootstrap' ) ) {
 			$skip_updates = get_site_option( 'skip_updates', [] );
 			foreach ( $skip_updates as $skip ) {
 				if ( $repo->file === $skip['slug'] ) {
@@ -299,7 +286,13 @@ trait GU_Trait {
 			}
 		}
 
-		return ! $dot_org_master || $override;
+		/**
+		 * Filter hook to completely ignore any updates from dot org when using Git Updater.
+		 *
+		 * @since 12.6.0
+		 * @param bool Default is false. Do not ignore updates from dot org.
+		 */
+		return ! $dot_org_master || $override || apply_filters( 'gu_ignore_dot_org', false );
 	}
 
 	/**
@@ -352,7 +345,7 @@ trait GU_Trait {
 	 * Check to see if wp-cron/background updating has finished.
 	 * Or not managed by Git Updater.
 	 *
-	 * @param null|\stdClass $repo Repo object.
+	 * @param null|stdClass $repo Repo object.
 	 *
 	 * @return bool true when waiting for background job to finish.
 	 */
@@ -448,7 +441,7 @@ trait GU_Trait {
 		 * @since 10.0.0
 		 * @param array $repos Array of repo data.
 		 */
-		$repos = \apply_filters( 'gu_get_repo_parts', $repos, $type );
+		$repos = apply_filters( 'gu_get_repo_parts', $repos, $type );
 
 		if ( array_key_exists( $repo, $repos['types'] ) ) {
 			$arr['type']       = $repos['types'][ $repo ];
@@ -479,12 +472,21 @@ trait GU_Trait {
 		array_pop( $rename );
 		$rename = implode( '-', $rename );
 
+		// For AJAX install, not from Install tab, slug is correct. Refer to Add-Ons.
+		if ( ( ! isset( $_POST['git_updater_repo'] ) && isset( $_POST['action'] ) )
+			&& ( wp_doing_ajax() && check_ajax_referer( 'updates' ) )
+		) {
+			if ( str_contains( sanitize_key( wp_unslash( $_POST['action'] ) ), 'install' ) ) {
+				$arr['slug'] = $slug;
+			}
+		}
+
 		if ( null === $upgrader_object ) {
 			$upgrader_object = $this;
 		}
 
 		$rename = isset( $upgrader_object->config[ $slug ] ) ? $slug : $rename;
-		$config = $this->get_class_vars( ( new \ReflectionClass( $upgrader_object ) )->getShortName(), 'config' );
+		$config = $this->get_class_vars( ( new ReflectionClass( $upgrader_object ) )->getShortName(), 'config' );
 
 		foreach ( (array) $config as $repo ) {
 			// Check repo slug or directory name for match.
@@ -494,14 +496,14 @@ trait GU_Trait {
 			];
 
 			// Exact match.
-			if ( \in_array( $slug, $slug_check, true ) ) {
+			if ( in_array( $slug, $slug_check, true ) ) {
 				$arr['slug'] = $repo->slug;
 				break;
 			}
 
 			// Soft match, there may still be an exact $slug match.
-			if ( \in_array( $rename, $slug_check, true ) ) {
-				$arr['slug'] = $repo->slug;
+			if ( in_array( $rename, $slug_check, true ) ) {
+				// $arr['slug'] = $repo->slug;
 			}
 		}
 
@@ -517,17 +519,20 @@ trait GU_Trait {
 	 */
 	final public function get_headers( $type ) {
 		$default_plugin_headers = [
-			'Name'        => 'Plugin Name',
-			'PluginURI'   => 'Plugin URI',
-			'Version'     => 'Version',
-			'Description' => 'Description',
-			'Author'      => 'Author',
-			'AuthorURI'   => 'Author URI',
-			'TextDomain'  => 'Text Domain',
-			'DomainPath'  => 'Domain Path',
-			'Network'     => 'Network',
-			'Requires'    => 'Requires at least',
-			'RequiresPHP' => 'Requires PHP',
+			'Name'            => 'Plugin Name',
+			'PluginURI'       => 'Plugin URI',
+			'Version'         => 'Version',
+			'Description'     => 'Description',
+			'Author'          => 'Author',
+			'AuthorURI'       => 'Author URI',
+			'License'         => 'License',
+			'TextDomain'      => 'Text Domain',
+			'DomainPath'      => 'Domain Path',
+			'Network'         => 'Network',
+			'Requires'        => 'Requires at least',
+			'RequiresPHP'     => 'Requires PHP',
+			'UpdateURI'       => 'Update URI',
+			'RequiresPlugins' => 'Requires Plugins',
 		];
 
 		$default_theme_headers = [
@@ -537,6 +542,7 @@ trait GU_Trait {
 			'Author'      => 'Author',
 			'AuthorURI'   => 'Author URI',
 			'Version'     => 'Version',
+			'License'     => 'License',
 			'Template'    => 'Template',
 			'Status'      => 'Status',
 			'Tags'        => 'Tags',
@@ -544,6 +550,7 @@ trait GU_Trait {
 			'DomainPath'  => 'Domain Path',
 			'Requires'    => 'Requires at least',
 			'RequiresPHP' => 'Requires PHP',
+			'UpdateURI'   => 'Update URI',
 		];
 
 		$all_headers = array_merge( ${"default_{$type}_headers"}, self::$extra_headers );
@@ -605,6 +612,7 @@ trait GU_Trait {
 		$header['ci_job']         = false;
 		$header['release_asset']  = false;
 		$header['primary_branch'] = false;
+		$header['did']            = null;
 
 		if ( ! empty( $header['host'] ) ) {
 			if ( 'GitHub' === $header_parts[0] && ! str_contains( $header['host'], 'github.com' ) ) {
@@ -636,8 +644,11 @@ trait GU_Trait {
 				}
 			}
 		}
-		$header['release_asset']  = ! $header['release_asset'] && ! empty( $headers['ReleaseAsset'] ) ? 'true' === $headers['ReleaseAsset'] : $header['release_asset'];
+		$header['release_asset']  = ! $header['release_asset'] && ! empty( $headers['ReleaseAsset'] ) ? true === (bool) $headers['ReleaseAsset'] : $header['release_asset'];
 		$header['primary_branch'] = ! $header['primary_branch'] && ! empty( $headers['PrimaryBranch'] ) ? $headers['PrimaryBranch'] : 'master';
+
+		$header['did'] = ! empty( $headers['PluginID'] ) ? $headers['PluginID'] : '';
+		$header['did'] = ! empty( $headers['ThemeID'] ) ? $headers['ThemeID'] : $header['did'];
 
 		return $header;
 	}
@@ -671,7 +682,7 @@ trait GU_Trait {
 		$overdue = ( ( time() - $timestamp ) / HOUR_IN_SECONDS ) > 24;
 		if ( $overdue ) {
 			$error_msg = esc_html__( 'There may be a problem with WP-Cron. A Git Updater WP-Cron event is overdue.', 'git-updater' );
-			$error     = new \WP_Error( 'git_updater_cron_error', $error_msg );
+			$error     = new WP_Error( 'git_updater_cron_error', $error_msg );
 			Singleton::get_instance( 'Fragen\Git_Updater\Messages', $this )->create_error_message( $error );
 		}
 	}
@@ -682,13 +693,9 @@ trait GU_Trait {
 	 * @return string Git Updater plugin version
 	 */
 	final public static function get_plugin_version() {
-		if ( ! function_exists( 'get_plugin_data' ) ) {
-			require_once ABSPATH . 'wp-admin/includes/plugin.php';
-		}
+		$plugin_version = get_file_data( dirname( __DIR__, 3 ) . '/git-updater.php', [ 'Version' => 'Version' ] )['Version'];
 
-		$plugin_data = \get_plugin_data( dirname( __DIR__, 3 ) . '/git-updater.php' );
-
-		return $plugin_data['Version'];
+		return $plugin_version;
 	}
 
 	/**
@@ -738,8 +745,6 @@ trait GU_Trait {
 
 		// Check if filter set elsewhere.
 		$disable_wp_cron = (bool) apply_filters( 'gu_disable_wpcron', false );
-		$disable_wp_cron = $disable_wp_cron ?: (bool) apply_filters_deprecated( 'github_updater_disable_wpcron', [ false ], '10.0.0', 'gu_disable_wpcron' );
-
 		if ( $disable_wp_cron ) {
 			$options['bypass_background_processing'] = '1';
 		}
@@ -748,49 +753,9 @@ trait GU_Trait {
 	}
 
 	/**
-	 * Set readme and changelog data when repo set to not check API.
-	 * Get data from local files.
-	 *
-	 * @param \stdClass|bool $response Plugin API response.
-	 * @param \stdClass      $repo Repo object.
-	 *
-	 * @return \stdClass
-	 */
-	final public function set_no_api_check_readme_changes( $response, $repo ) {
-		if ( ( $response || $repo ) && isset( $repo->git ) && ! isset( $repo->remote_version ) ) {
-			$repo_api = Singleton::get_instance( 'API\API', $this )->get_repo_api( $repo->git, $repo );
-
-			$changelog_file = $this->base->get_changelog_filename( $repo );
-			$changelog      = $changelog_file ? $repo_api->get_local_info( $repo, $changelog_file ) : false;
-			if ( $changelog ) {
-				$parser                      = new \Parsedown();
-				$changes                     = $parser->text( $changelog );
-				$repo->sections['changelog'] = $changes;
-			}
-
-			$readme = $repo_api->get_local_info( $repo, 'readme.txt' );
-			if ( $readme ) {
-				$parser = new Readme_Parser( $readme );
-				$readme = $parser->parse_data();
-				$repo_api->set_readme_info( $readme );
-			}
-
-			$repo_requires      = $this->get_repo_requirements( $repo );
-			$repo->requires     = empty( $repo->requires ) ? $repo_requires['RequiresWP'] : $repo->requires;
-			$repo->requires_php = empty( $repo->requires_php ) ? $repo_requires['RequiresPHP'] : $repo->requires_php;
-			$repo->version      = $repo->local_version;
-
-			$response_arr = array_merge( (array) $response, (array) $repo );
-			$response     = (object) $response_arr;
-		}
-
-		return $response;
-	}
-
-	/**
 	 * Get WP and PHP requirements from main plugin/theme file.
 	 *
-	 * @param \stdClass $repo Repository object.
+	 * @param stdClass $repo Repository object.
 	 *
 	 * @return array
 	 */
@@ -805,7 +770,7 @@ trait GU_Trait {
 		];
 		$filepath      = 'gist' === $repo->git
 			? trailingslashit( dirname( $repo->local_path ) ) . $repo->file
-			: $repo->local_path . basename( $repo->file );
+			: '';
 		$repo_data     = file_exists( $filepath ) ? get_file_data( $filepath, $requires ) : $default_empty;
 
 		return $repo_data;
@@ -819,11 +784,11 @@ trait GU_Trait {
 	 *
 	 * @global WP_Filesystem_Base $wp_filesystem WordPress filesystem subclass.
 	 *
-	 * @param array|WP_Error $result     Result from WP_Upgrader::install_package().
-	 * @param array          $hook_extra Extra arguments passed to hooked filters.
+	 * @param array|WP_Error $result Result from WP_Upgrader::install_package().
+
 	 * @return bool
 	 */
-	final public function delete_upgrade_source( $result, $hook_extra ) {
+	final public function delete_upgrade_source( $result ) {
 		global $wp_filesystem;
 
 		if ( ! is_wp_error( $result ) && ! empty( $result['destination_name'] ) ) {
@@ -834,5 +799,33 @@ trait GU_Trait {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * Get hash of DID.
+	 *
+	 * @param  string $did DID.
+	 *
+	 * @return string
+	 */
+	final public function get_did_hash( $did ): string {
+		return substr( hash( 'sha256', $did ), 0, 6 );
+	}
+
+	/**
+	 * Return plugin file without DID hash.
+	 *
+	 * Assumes pattern of <slug>-<hash>.
+	 *
+	 * @param string $did DID.
+	 * @param string $plugin Plugin basename.
+	 *
+	 * @return string
+	 */
+	final public function get_file_without_did_hash( $did, $plugin ): string {
+		list( $slug, $file ) = explode( '/', $plugin, 2 );
+		$slug                = str_replace( '-' . $this->get_did_hash( $did ), '', $slug );
+
+		return $slug . '/' . $file;
 	}
 }

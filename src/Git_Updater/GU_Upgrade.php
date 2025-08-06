@@ -11,6 +11,7 @@
 namespace Fragen\Git_Updater;
 
 use Fragen\Git_Updater\Traits\GU_Trait;
+use WP_Error;
 
 /**
  * Exit if called directly.
@@ -30,7 +31,7 @@ final class GU_Upgrade {
 	 *
 	 * @var int
 	 */
-	private $db_version = '12.0.0'; // TODO: change number.
+	private $db_version = '12.13.0'; // TODO: change number.
 
 	/**
 	 * Run update check against db_version.
@@ -73,7 +74,6 @@ final class GU_Upgrade {
 	 * Flush caches and delete cached options.
 	 */
 	private function delete_flush_cache() {
-		wp_cache_flush();
 		$this->delete_all_cached_data();
 	}
 
@@ -91,21 +91,21 @@ final class GU_Upgrade {
 			delete_site_option( 'github_updater' );
 		}
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
-		\deactivate_plugins( 'github-updater/git-updater.php' );
+		deactivate_plugins( 'github-updater/git-updater.php' );
 	}
 
 	/**
 	 * Check for deletion of cron event.
 	 *
-	 * @param null|bool|\WP_Error $pre       Value to return instead. Default null to continue unscheduling the event.
-	 * @param int                 $timestamp Timestamp for when to run the event.
-	 * @param string              $hook      Action hook, the execution of which will be unscheduled.
+	 * @param null|bool|WP_Error $pre       Value to return instead. Default null to continue unscheduling the event.
+	 * @param int                $timestamp Timestamp for when to run the event.
+	 * @param string             $hook      Action hook, the execution of which will be unscheduled.
 	 *
-	 * @return null|bool|\WP_Error
+	 * @return null|bool|WP_Error
 	 */
 	public function pre_unschedule_event( $pre, $timestamp, $hook ) {
 		if ( 'gu_delete_access_tokens' === $hook ) {
-			$days = ( \wp_next_scheduled( 'gu_delete_access_tokens' ) - time() ) / \DAY_IN_SECONDS;
+			$days = ( wp_next_scheduled( 'gu_delete_access_tokens' ) - time() ) / \DAY_IN_SECONDS;
 			if ( $days > 29 ) {
 				$this->flush_tokens();
 			}
@@ -129,7 +129,6 @@ final class GU_Upgrade {
 			'db_version',
 			'branch_switch',
 			'bypass_background_processing',
-			'deprecated_error_logging',
 		];
 		$options      = $this->get_class_vars( 'Base', 'options' );
 		$new_options  = array_filter(

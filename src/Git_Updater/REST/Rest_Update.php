@@ -10,9 +10,15 @@
 
 namespace Fragen\Git_Updater\REST;
 
+use Exception;
 use Fragen\Singleton;
 use Fragen\Git_Updater\Traits\GU_Trait;
 use Fragen\Git_Updater\Branch;
+use Plugin_Upgrader;
+use stdClass;
+use Theme_Upgrader;
+use UnexpectedValueException;
+use WP_REST_Request;
 
 /*
  * Exit if called directly.
@@ -72,7 +78,7 @@ class Rest_Update {
 	 * @param string $plugin_slug Plugin slug.
 	 * @param string $tag         Plugin tag/branch.
 	 *
-	 * @throws \UnexpectedValueException Plugin not found or not updatable.
+	 * @throws UnexpectedValueException Plugin not found or not updatable.
 	 */
 	public function update_plugin( $plugin_slug, $tag = 'master' ) {
 		$plugin           = null;
@@ -86,7 +92,7 @@ class Rest_Update {
 		}
 
 		if ( ! $plugin ) {
-			throw new \UnexpectedValueException( 'Plugin not found or not updatable with Git Updater: ' . esc_html( $plugin_slug ) );
+			throw new UnexpectedValueException( 'Plugin not found or not updatable with Git Updater: ' . esc_html( $plugin_slug ) );
 		}
 
 		if ( is_plugin_active( $plugin->file ) ) {
@@ -108,10 +114,10 @@ class Rest_Update {
 			'site_transient_update_plugins',
 			function ( $current ) use ( $plugin, $update ) {
 				// needed to fix PHP 7.4 warning.
-				if ( ! \is_object( $current ) ) {
-					$current           = new \stdClass();
+				if ( ! is_object( $current ) ) {
+					$current           = new stdClass();
 					$current->response = null;
-				} elseif ( ! \property_exists( $current, 'response' ) ) {
+				} elseif ( ! property_exists( $current, 'response' ) ) {
 					$current->response = null;
 				}
 
@@ -124,10 +130,16 @@ class Rest_Update {
 			1
 		);
 
-		// Add authentication header to download package.
-		add_filter( 'http_request_args', [ Singleton::get_instance( 'Fragen\Git_Updater\API\API', $this ), 'download_package' ], 15, 2 );
+		// Load hook for adding authentication headers for download packages.
+		add_filter(
+			'upgrader_pre_download',
+			function () {
+				add_filter( 'http_request_args', [ Singleton::get_instance( 'Fragen\Git_Updater\API\API', $this ), 'download_package' ], 15, 2 );
+				return false; // upgrader_pre_download filter default return value.
+			}
+		);
 
-		$upgrader = new \Plugin_Upgrader( $this->upgrader_skin );
+		$upgrader = new Plugin_Upgrader( $this->upgrader_skin );
 		$upgrader->upgrade( $plugin->file );
 
 		if ( $is_plugin_active ) {
@@ -144,7 +156,7 @@ class Rest_Update {
 	 * @param string $theme_slug Theme slug.
 	 * @param string $tag        Theme tag/branch.
 	 *
-	 * @throws \UnexpectedValueException Theme not found or not updatable.
+	 * @throws UnexpectedValueException Theme not found or not updatable.
 	 */
 	public function update_theme( $theme_slug, $tag = 'master' ) {
 		$theme = null;
@@ -157,7 +169,7 @@ class Rest_Update {
 		}
 
 		if ( ! $theme ) {
-			throw new \UnexpectedValueException( 'Theme not found or not updatable with Git Updater: ' . esc_html( $theme_slug ) );
+			throw new UnexpectedValueException( 'Theme not found or not updatable with Git Updater: ' . esc_html( $theme_slug ) );
 		}
 
 		Singleton::get_instance( 'Fragen\Git_Updater\Base', $this )->get_remote_repo_meta( $theme );
@@ -174,10 +186,10 @@ class Rest_Update {
 			'site_transient_update_themes',
 			function ( $current ) use ( $theme, $update ) {
 				// needed to fix PHP 7.4 warning.
-				if ( ! \is_object( $current ) ) {
-					$current           = new \stdClass();
+				if ( ! is_object( $current ) ) {
+					$current           = new stdClass();
 					$current->response = null;
-				} elseif ( ! \property_exists( $current, 'response' ) ) {
+				} elseif ( ! property_exists( $current, 'response' ) ) {
 					$current->response = null;
 				}
 
@@ -190,10 +202,16 @@ class Rest_Update {
 			1
 		);
 
-		// Add authentication header to download package.
-		add_filter( 'http_request_args', [ Singleton::get_instance( 'Fragen\Git_Updater\API\API', $this ), 'download_package' ], 15, 2 );
+		// Load hook for adding authentication headers for download packages.
+		add_filter(
+			'upgrader_pre_download',
+			function () {
+				add_filter( 'http_request_args', [ Singleton::get_instance( 'Fragen\Git_Updater\API\API', $this ), 'download_package' ], 15, 2 );
+				return false; // upgrader_pre_download filter default return value.
+			}
+		);
 
-		$upgrader = new \Theme_Upgrader( $this->upgrader_skin );
+		$upgrader = new Theme_Upgrader( $this->upgrader_skin );
 		$upgrader->upgrade( $theme->slug );
 	}
 
@@ -219,9 +237,9 @@ class Rest_Update {
 	 * webhook matches the branch specified by the url, use the latest
 	 * update available as specified in the webhook payload.
 	 *
-	 * @param \WP_REST_Request|null $request Request data from update webhook.
+	 * @param WP_REST_Request|null $request Request data from update webhook.
 	 *
-	 * @throws \UnexpectedValueException Under multiple bad or missing params.
+	 * @throws UnexpectedValueException Under multiple bad or missing params.
 	 */
 	public function process_request( $request = null ) {
 		$args = $this->process_request_data( $request );
@@ -232,16 +250,8 @@ class Rest_Update {
 			if ( ! $key
 				|| get_site_option( 'git_updater_api_key' ) !== $key
 			) {
-				throw new \UnexpectedValueException( 'Bad API key.' );
+				throw new UnexpectedValueException( 'Bad API key.' );
 			}
-
-			/**
-			 * Allow access into the REST Update process.
-			 *
-			 * @since  10.0.0
-			 * @access public
-			 */
-			do_action_deprecated( 'github_updater_pre_rest_process_request', [], '10.0.0', 'gu_pre_rest_process_request' );
 
 			/**
 			 * Allow access into the REST Update process.
@@ -265,7 +275,7 @@ class Rest_Update {
 			$remote_branch  = $remote_branch ?? $tag;
 			$current_branch = $override ? $remote_branch : $current_branch;
 			if ( $remote_branch !== $current_branch && ! $override ) {
-				throw new \UnexpectedValueException( 'Webhook tag and current branch are not matching. Consider using `override` query arg.' );
+				throw new UnexpectedValueException( 'Webhook tag and current branch are not matching. Consider using `override` query arg.' );
 			}
 
 			if ( $plugin ) {
@@ -273,9 +283,9 @@ class Rest_Update {
 			} elseif ( $theme ) {
 				$this->update_theme( $theme, $tag );
 			} else {
-				throw new \UnexpectedValueException( 'No plugin or theme specified for update.' );
+				throw new UnexpectedValueException( 'No plugin or theme specified for update.' );
 			}
-		} catch ( \Exception $e ) {
+		} catch ( Exception $e ) {
 			$http_response = [
 				'success'      => false,
 				'messages'     => $e->getMessage(),
@@ -283,7 +293,7 @@ class Rest_Update {
 				'elapsed_time' => round( ( microtime( true ) - $start ) * 1000, 2 ) . ' ms',
 				'deprecated'   => $deprecated,
 			];
-			$this->log_exit( $http_response, 417 );
+			$this->log_exit( $http_response, 418 );
 		}
 
 		// Only set branch on successful update.
@@ -313,7 +323,7 @@ class Rest_Update {
 
 		if ( $this->is_error() ) {
 			$response['success'] = false;
-			$this->log_exit( $response, 417 );
+			$this->log_exit( $response, 418 );
 		}
 		$this->log_exit( $response, 200 );
 	}
@@ -321,12 +331,12 @@ class Rest_Update {
 	/**
 	 * Process request data from REST API or RESTful endpoint.
 	 *
-	 * @param \WP_REST_Request|array $request Request data from update webhook.
+	 * @param WP_REST_Request|array $request Request data from update webhook.
 	 *
 	 * @return array
 	 */
 	public function process_request_data( $request = null ) {
-		if ( $request instanceof \WP_REST_Request ) {
+		if ( $request instanceof WP_REST_Request ) {
 			$params        = $request->get_params();
 			$slug          = $params['plugin'] ?: $params['theme'];
 			$params['tag'] = $params['tag'] ?: $this->get_primary_branch( $slug );
@@ -430,16 +440,6 @@ class Rest_Update {
 
 		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		error_log( json_encode( $response, $json_encode_flags ) );
-
-		/**
-		 * Action hook after processing REST process.
-		 *
-		 * @since 8.6.0
-		 *
-		 * @param array $response
-		 * @param int   $code     HTTP response.
-		 */
-		do_action_deprecated( 'github_updater_post_rest_process_request', [ $response, $code ], '10.0.0', 'gu_post_rest_process_request' );
 
 		/**
 		 * Action hook after processing REST process.

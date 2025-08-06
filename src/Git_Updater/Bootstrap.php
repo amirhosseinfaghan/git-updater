@@ -13,6 +13,7 @@ namespace Fragen\Git_Updater;
 use Fragen\Git_Updater\Additions\Bootstrap as Additions_Bootstrap;
 use Fragen\Git_Updater\REST\REST_API;
 use Fragen\Git_Updater\Traits\GU_Trait;
+use WP_Dismiss_Notice;
 
 /*
  * Exit if called directly.
@@ -21,44 +22,11 @@ if ( ! defined( 'WPINC' ) ) {
 	die;
 }
 
-// Load textdomain.
-add_action(
-	'init',
-	function () {
-		load_plugin_textdomain( 'git-updater' );
-	}
-);
-
 /**
  * Class Bootstrap
  */
 class Bootstrap {
 	use GU_Trait;
-
-	/**
-	 * Holds main plugin file.
-	 *
-	 * @var string
-	 */
-	protected $file;
-
-	/**
-	 * Holds main plugin directory.
-	 *
-	 * @var string
-	 */
-	protected $dir;
-
-	/**
-	 * Constructor.
-	 *
-	 * @param  string $file Main plugin file.
-	 * @return void
-	 */
-	public function __construct( $file ) {
-		$this->file = $file;
-		$this->dir  = dirname( $file );
-	}
 
 	/**
 	 * Deactivate plugin and die as composer autoloader not loaded.
@@ -67,7 +35,7 @@ class Bootstrap {
 	 */
 	public function deactivate_die() {
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
-		\deactivate_plugins( plugin_basename( $this->file ) );
+		deactivate_plugins( plugin_basename( PLUGIN_FILE ) );
 
 		$message = sprintf(
 			/* translators: %1: opening tag, %2: closing tag */
@@ -85,50 +53,22 @@ class Bootstrap {
 	 * @return void
 	 */
 	public function run() {
-		if ( ! $this->check_requirements() ) {
-			return;
-		}
-
-		register_deactivation_hook( $this->file, [ $this, 'remove_cron_events' ] );
+		register_deactivation_hook( PLUGIN_FILE, [ $this, 'remove_cron_events' ] );
 		require_once ABSPATH . 'wp-admin/includes/plugin.php';
 		deactivate_plugins( [ 'git-updater-pro/git-updater-pro.php', 'git-updater-additions/git-updater-additions.php' ] );
 
 		require_once __DIR__ . '/Shim.php';
 		( new GU_Freemius() )->init();
 		( new REST_API() )->load_hooks();
-		( new Additions_Bootstrap( $this->file ) )->run();
+		( new Additions_Bootstrap() )->run();
 		( new Init() )->run();
 		( new Messages() )->create_error_message( 'get_license' );
 
 		// Initialize time dissmissible admin notices.
-		new \WP_Dismiss_Notice();
-	}
+		new WP_Dismiss_Notice();
 
-	/**
-	 * Check PHP requirements and deactivate plugin if not met.
-	 *
-	 * @return void|bool
-	 */
-	public function check_requirements() {
-		if ( version_compare( phpversion(), '7.2', '<=' ) ) {
-			add_action(
-				'admin_init',
-				function () {
-					echo '<div class="error notice is-dismissible"><p>';
-					printf(
-						/* translators: 1: minimum PHP version required */
-						wp_kses_post( __( 'Git Updater cannot run on PHP versions older than %1$s.', 'git-updater' ) ),
-						'7.2'
-					);
-					echo '</p></div>';
-					\deactivate_plugins( plugin_basename( $this->file ) );
-				}
-			);
-
-			return false;
-		}
-
-		return true;
+		// Check for update API redirect.
+		add_action( 'init', fn() => $this->check_update_api_redirect(), 0 );
 	}
 
 	/**
@@ -139,8 +79,8 @@ class Bootstrap {
 	public function remove_cron_events() {
 		$crons = [ 'gu_get_remote_plugin', 'gu_get_remote_theme' ];
 		foreach ( $crons as $cron ) {
-			$timestamp = \wp_next_scheduled( $cron );
-			\wp_unschedule_event( $timestamp, $cron );
+			$timestamp = wp_next_scheduled( $cron );
+			wp_unschedule_event( $timestamp, $cron );
 		}
 	}
 
@@ -180,12 +120,34 @@ class Bootstrap {
 			update_site_option( 'git_updater', array_merge( $options, [ 'current_branch_git-updater' => 'develop' ] ) );
 		}
 
-		if ( $slug && 'git-updater/git-updater.php' !== $slug ) {
+		// Strip hash from slug and re-make file.
+		$hook = current_action();
+		$file = str_replace( 'activate_', '', $hook );
+		$file = $this->get_file_without_did_hash( 'did:plc:afjf7gsjzsqmgc7dlhb553mv', $file );
+
+		if ( $slug && 'git-updater/git-updater.php' !== $file ) {
 			require_once __DIR__ . '/Shim.php';
 			$result = move_dir( $plugin_dir . dirname( $slug ), $plugin_dir . 'git-updater', true );
-			if ( \is_wp_error( $result ) ) {
+			if ( is_wp_error( $result ) ) {
 				return $result;
 			}
+		}
+	}
+
+	/**
+	 * Check for API redirects from AspireUpdate or FAIR Package Manager.
+	 *
+	 * Run appropriate filter to redefine update API.
+	 *
+	 * @return void
+	 */
+	public function check_update_api_redirect() {
+		if ( class_exists( '\AspireUpdate\Admin_Settings' ) ) {
+			add_filter( 'gu_api_domain', fn () => \AspireUpdate\Admin_Settings::get_instance()->get_setting( 'api_host' ) );
+		}
+
+		if ( function_exists( '\Fair\Default_Repo\get_default_repo_domain' ) ) {
+			add_filter( 'gu_api_domain', fn () => \FAIR\Default_Repo\get_default_repo_domain() );
 		}
 	}
 }
